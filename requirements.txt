@@ -1,2 +1,11 @@
-fastapi
-uvicorn
+
+annotated-types==0.7.0
+anyio==4.10.0
+click==8.2.1
+exception-extensions==4.15.0
+typing-inspection==0.4.1
+uvicorn==0.35.0
+# Add FastAPI if you're using it
+fastapi==0.115.6
+# Add other dependencies your app needs
+                
