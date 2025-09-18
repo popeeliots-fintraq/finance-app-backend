@@ -1,2 +1,2 @@
-fastAPI
-uvicorn
+fastapi==0.115.6
+uvicorn==0.22.0
