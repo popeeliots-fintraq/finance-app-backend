@@ -11,4 +11,5 @@ class Base(DeclarativeBase):
 
 # Import all models here so that Base has them before being
 # imported by Alembic, etc.
-# from . import models
+from . import models
+from . import user_profile
