@@ -11,6 +11,11 @@ class Base(DeclarativeBase):
 
 # Import all models here so that Base has them before being
 # imported by Alembic, etc.
+
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, DECIMAL, UniqueConstraint # <--- ADDED SQLALCHEMY IMPORTS
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+from decimal import Decimal
 from . import models
 from . import user_profile
 from . import smart_transfer_rule
