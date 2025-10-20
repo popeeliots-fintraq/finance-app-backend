@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 # Import models and logic
 from ..db.models import SalaryAllocationProfile
 from ..db.user_profile import UserProfile
-from ..ml.scaling_logic import calculate_dynamic_baseline
+from ..services.ml_service import calculate_dynamic_minimal_baseline
 
 class LeakageService:
     """
