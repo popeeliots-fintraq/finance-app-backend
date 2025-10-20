@@ -4,6 +4,7 @@ from fastapi import FastAPI
 # 1. IMPORT the new salary router
 from api.v1.salary import router as salary_router 
 from api.v1.user_profile import router as profile_router
+from api.v1.leakage import router as leakage_router
 app = FastAPI(
     title="Fin-Traq Backend API",
     version="V2"
@@ -17,3 +18,4 @@ def read_root():
 # 2. INCLUDE the new Salary Router
 app.include_router(salary_router, prefix="/api/v1")
 app.include_router(profile_router, prefix="/api/v1")
+app.include_router(leakage_router, prefix="/api/v1")
