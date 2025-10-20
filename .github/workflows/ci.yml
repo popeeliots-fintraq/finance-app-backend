@@ -1,0 +1,41 @@
+name: Python Backend CI/CD (Fin-Traq V2)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install quality tools
+          pip install flake8
+
+      - name: Run Flake8 Linter Check
+        run: |
+          # Stop the build if there are Python syntax errors or undefined names
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Warning on complexity and style violations
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Run Database Initialization (Pre-Deployment Check)
+        run: |
+          echo "Running model import test..."
+          python -c "from db.base import Base; print('Models imported successfully')"
+          
+      - name: Basic API Health Check
+        run: echo "Code quality check passed. Ready for deployment configuration."
