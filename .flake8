@@ -1,0 +1,17 @@
+[flake8]
+# Lines that are too long will trigger F401/E501 (set max-line-length as needed)
+max-line-length = 88 
+# Define the files/directories the linter should ignore
+exclude = 
+    .git,
+    __pycache__,
+    venv,                  # <--- IGNORE VIRTUAL ENVIRONMENT
+    .venv,
+    .mypy_cache,
+    dist,
+    build,
+    # Specific vendor directories often placed inside site-packages:
+    *vendor*, 
+    *six.py*,
+    *compat.py*,
+    # Add other directories known to cause issues if needed
