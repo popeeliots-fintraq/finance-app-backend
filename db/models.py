@@ -1,6 +1,7 @@
 # db/models.py
 
 from sqlalchemy import Column, String, DECIMAL, Date, ForeignKey, PrimaryKeyConstraint
+from decimal import Decimal
 from .base import Base 
 
 class SalaryAllocationProfile(Base):
