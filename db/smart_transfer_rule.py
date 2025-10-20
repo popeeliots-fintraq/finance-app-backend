@@ -1,8 +1,10 @@
 # db/smart_transfer_rule.py
 
-from sqlalchemy import Column, String, DECIMAL, ForeignKey, Integer, Boolean, Enum
+from sqlalchemy import Column, String, DECIMAL, ForeignKey, Integer, Boolean, Enum, UniqueConstraint
+from decimal import Decimal
 from .base import Base 
 from enum import Enum as PyEnum
+
 
 # Define an Enum for the type of action (for validation and clarity)
 class RuleActionType(PyEnum):
