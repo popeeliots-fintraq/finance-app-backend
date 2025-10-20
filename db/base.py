@@ -13,3 +13,4 @@ class Base(DeclarativeBase):
 # imported by Alembic, etc.
 from . import models
 from . import user_profile
+rom . import smart_transfer_rule
