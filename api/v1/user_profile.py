@@ -8,7 +8,8 @@ from typing import Annotated
 from ...schemas.user_profile import UserProfileCreate, UserProfileOut
 from ...db.database import get_db
 from ...db.user_profile import UserProfile
-from ...ml.efs_calculator import calculate_equivalent_family_size
+# FIX: Corrected import path to ml_service.py where the function was placed
+from ...services.ml_service import calculate_equivalent_family_size 
 
 # Initialize the FastAPI Router
 router = APIRouter(
@@ -44,7 +45,14 @@ def create_or_update_user_profile(
     profile_dict = profile_data.model_dump() 
     
     # 2. Calculate the EFS factor
-    equivalent_family_size = calculate_equivalent_family_size(profile_dict)
+    # The calculate_equivalent_family_size function expects individual keyword arguments,
+    # so we must pass them explicitly from the profile_data object.
+    equivalent_family_size = calculate_equivalent_family_size(
+        num_adults=profile_data.num_adults,
+        num_children_under_6=profile_data.num_dependents_under_6,
+        num_children_6_to_17=profile_data.num_dependents_6_to_17,
+        num_dependents_over_18=profile_data.num_dependents_over_18
+    )
     
     # ----------------------------------------------------
     # DATABASE INTERACTION: Check if profile exists (Update or Create)
