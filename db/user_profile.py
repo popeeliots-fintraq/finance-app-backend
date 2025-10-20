@@ -1,6 +1,7 @@
 # db/user_profile.py
 
-from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, ForeignKey
+from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, ForeignKey, DECIMAL
+from decimal import Decimal
 from .base import Base 
 
 class UserProfile(Base):
