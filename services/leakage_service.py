@@ -3,7 +3,10 @@
 from decimal import Decimal
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
-from ..utils.ml_logic import
+from ..utils.ml_logic import (
+    calculate_equivalent_family_size,
+    calculate_dynamic_baseline
+)
 
 # Import models and logic
 from ..db.models import SalaryAllocationProfile
