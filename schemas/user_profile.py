@@ -34,6 +34,13 @@ class UserProfileOut(UserProfileBase):
     
     # The calculated output field, used for dynamic baseline adjustment
     equivalent_family_size: EFSDecimal = Field(Decimal("1.00"), ge=Decimal("1.00"), description="The calculated Equivalent Family Size (EFS) factor.")
+
+    # ⚠️ ADDED: The structured input that was derived/calculated for the Stratified Dependent Scaling function.
+    # This allows you to audit which weights were used by the ML logic.
+    dependent_structure: List[Tuple[str, int]] = Field(
+        ..., 
+        description="Household composition structure derived from input fields for SDS calculation. E.g., [('additional_adult', 1), ('child', 2)]"
+    )
     
     # Configuration to enable mapping from the SQLAlchemy ORM model
     class Config:
