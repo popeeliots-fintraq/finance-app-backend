@@ -90,7 +90,7 @@ class OrchestrationService:
             })
             
             remaining_fund -= amount_to_suggest
-            total_suggested += amount_to_allocate
+            total_suggested += amount_to_suggest
 
         # 3. Finalize Plan
         return {
