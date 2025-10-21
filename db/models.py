@@ -19,7 +19,12 @@ class SalaryAllocationProfile(Base):
     target_savings_rate = Column(DECIMAL(5, 2), nullable=False, default=Decimal("0.00"))
 
     projected_discretionary_float = Column(DECIMAL(10, 2), nullable=False)
+    
+    # 🚨 V2 ADDITION 1: Leak Finder Output (Money found and available for suggestion)
     projected_reclaimable_salary = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
+    
+    # 🚨 V2 ADDITION 2: Guided Orchestration Output (Money user has consented to 'move' internally)
+    consented_move_amount = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
 
     __table_args__ = (
         PrimaryKeyConstraint('user_id', 'reporting_period', name='pk_salary_allocation'),
