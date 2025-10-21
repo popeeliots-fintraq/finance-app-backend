@@ -4,12 +4,21 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.orm import Session
 from decimal import Decimal
 from typing import Dict, Any
+from datetime import datetime
 
 # Import Dependencies and Services
-from ..dependencies import get_db, get_verified_user_id # Assume get_verified_user_id uses Firebase Auth
+from ..dependencies import get_db, get_verified_user_id 
 from ..services.leakage_service import LeakageService 
 from ..services.orchestration_service import OrchestrationService
-from ..schemas.leakage_data import LeakageOut  # 🚨 ASSUMPTION: You will create this schema next
+
+# 🚨 V2 ADDITION: Import Schemas for Leakage/Consent
+from ..schemas.leakage_data import LeakageOut 
+from ..schemas.orchestration_data import (
+    ConsentPlanOut,          # Output schema for the suggestion plan
+    ConsentMoveIn,           # Input schema for the consent move request
+    ConsentMoveOut           # Output schema after the consent is recorded
+)
+
 
 router = APIRouter(
     prefix="/v2",
@@ -18,31 +27,29 @@ router = APIRouter(
     dependencies=[Depends(get_verified_user_id)] 
 )
 
+# ----------------------------------------------------------------------
+# 1. LEAK FINDER (PHASE 1) - READ-ONLY 
+# ----------------------------------------------------------------------
+
 @router.get(
     "/leakage-buckets", 
-    response_model=LeakageOut, # 🚨 Assuming you will define this Pydantic schema
+    response_model=LeakageOut,
     status_code=status.HTTP_200_OK,
     summary="Get the Leakage Bucket View using Stratified Dependent Scaling (SDS)."
 )
 def get_leakage_bucket_view(
-    user_id: str = Depends(get_verified_user_id), # User ID verified from Firebase Token
+    user_id: str = Depends(get_verified_user_id), 
     db: Session = Depends(get_db)
 ):
     """
-    Calculates the financial leakage amount from categorized spends by comparing 
-    spending against the Dynamic Minimal Baseline (DMB) refined by SDS. 
-    Replaces the old expense dashboard view. [cite: 2025-10-15]
+    Calculates the financial leakage amount, replacing the old expense dashboard view.
     """
     try:
         leakage_service = LeakageService(db=db, user_id=user_id)
-        
-        # This calls the service that uses the EFS/SDS logic you just committed
         leakage_data = leakage_service.calculate_leakage()
-        
         return leakage_data
         
     except ValueError as e:
-        # Catch errors from the service (e.g., Salary Allocation Profile not found)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail=str(e)
@@ -54,32 +61,30 @@ def get_leakage_bucket_view(
         )
 
 # ----------------------------------------------------------------------
-# 🚨 NEXT ROUTE: SALARY AUTOPILOT (ORCHESTRATION) 
+# 2. AUTOPILOT SUGGESTION (PHASE 2) - READ-ONLY 
 # ----------------------------------------------------------------------
 
 @router.post(
     "/autopilot-plan",
+    response_model=ConsentPlanOut, # 🚨 UPDATED RESPONSE MODEL
     status_code=status.HTTP_200_OK,
-    summary="Calculate the Salary Autopilot transfer plan."
+    summary="Generates the Consent Suggestion Plan for recovered money (read-only)."
 )
-def generate_automated_transfer_plan(
-    # NOTE: You might need to adjust the date input based on how your client sends it
+def generate_consent_suggestion_plan(
     reporting_period: str, # Expecting 'YYYY-MM-DD'
     user_id: str = Depends(get_verified_user_id),
     db: Session = Depends(get_db)
 ):
     """
-    Calculates how recovered money (leakage) is converted into tax savings or goals 
-    automatically based on Smart Rules (Guided Execution). [cite: 2025-10-15]
+    Calculates how recovered money SHOULD be converted into goals based on Smart Rules.
+    This is a READ operation; it does NOT commit any balance changes.
     """
     try:
-        # Convert string date to datetime.date object
-        from datetime import datetime
         period_date = datetime.strptime(reporting_period, "%Y-%m-%d").date()
-        
         orchestration_service = OrchestrationService(db=db, user_id=user_id)
         
-        plan = orchestration_service.calculate_automated_transfer_plan(
+        # 🚨 UPDATED CALL: Use the new suggestion method
+        plan = orchestration_service.generate_consent_suggestion_plan(
             reporting_period=period_date
         )
         
@@ -90,5 +95,51 @@ def generate_automated_transfer_plan(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail=f"Invalid date format or data: {e}"
         )
+    except Exception as e:
+        # Catch NoResultFound from the service if the profile is missing
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=str(e)
+        )
 
-# Don't forget to import this new router into your main application file (e.g., app.py).
+# ----------------------------------------------------------------------
+# 3. CONSENT EXECUTION (PHASE 2) - WRITE ACTION 
+# ----------------------------------------------------------------------
+
+@router.post(
+    "/autopilot-consent",
+    response_model=ConsentMoveOut, # 🚨 NEW RESPONSE MODEL
+    status_code=status.HTTP_200_OK,
+    summary="Records user consent and updates the internal displayed balance (WRITE action)."
+)
+def record_consent_move(
+    consent_request: ConsentMoveIn, # 🚨 NEW INPUT SCHEMA
+    user_id: str = Depends(get_verified_user_id),
+    db: Session = Depends(get_db)
+):
+    """
+    This endpoint is called when the user consents ('YES'). It performs the
+    internal 'move' by adjusting the user's tracking fields in the database.
+    """
+    try:
+        # Convert string date from schema input to datetime.date object
+        period_date = datetime.strptime(consent_request.reporting_period, "%Y-%m-%d").date()
+        
+        orchestration_service = OrchestrationService(db=db, user_id=user_id)
+        
+        # This is the function that contains the db.commit()
+        result = orchestration_service.record_consent_and_update_balance(
+            consented_amount=consent_request.consented_amount,
+            reporting_period=period_date
+        )
+        
+        return result
+        
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions (e.g., 400 validation from the service)
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Failed to record consent: {e}"
+        )
