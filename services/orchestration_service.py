@@ -5,9 +5,10 @@ from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from datetime import date
 from sqlalchemy.exc import NoResultFound
+# 🚨 FIX: Import HTTPException for service-layer error handling
+from fastapi import HTTPException 
 
 # Import models
-# NOTE: Assumes you will update SalaryAllocationProfile model with 'consented_move_amount'
 from ..db.models import SalaryAllocationProfile, SmartTransferRule 
 
 class OrchestrationService:
@@ -38,7 +39,7 @@ class OrchestrationService:
 
     def generate_consent_suggestion_plan(self, reporting_period: date) -> Dict[str, Any]:
         """
-        🚨 RENAMED/UPDATED: Calculates how the reclaimable fund SHOULD be allocated 
+        Calculates how the reclaimable fund SHOULD be allocated 
         across active Smart Rules, generating a suggestion plan (not a transfer plan).
         """
         try:
@@ -89,25 +90,24 @@ class OrchestrationService:
             })
             
             remaining_fund -= amount_to_suggest
-            total_suggested += amount_to_suggest
+            total_suggested += amount_to_allocate
 
         # 3. Finalize Plan
         return {
             "available_fund": available_fund.quantize(Decimal("0.01")),
             "total_suggested": total_suggested.quantize(Decimal("0.01")),
             "unallocated_fund": remaining_fund.quantize(Decimal("0.01")),
-            "suggestion_plan": suggestion_plan, # 🚨 RENAMED
+            "suggestion_plan": suggestion_plan, 
             "message": "Consent suggestion plan generated based on Smart Rules and reclaimable salary."
         }
 
     # ----------------------------------------------------------------------
-    # 🚨 NEW: CONSENT MOVE EXECUTION LOGIC 
+    # CONSENT MOVE EXECUTION LOGIC 
     # ----------------------------------------------------------------------
 
     def record_consent_and_update_balance(self, consented_amount: Decimal, reporting_period: date) -> Dict[str, Any]:
         """
-        Records the user's consent to 'move' the fund internally for display purposes,
-        allowing the app to display (Total - Movable Money) once consented.
+        Records the user's consent to 'move' the fund internally for display purposes.
         
         NOTE: This requires the SalaryAllocationProfile model to have 
               'consented_move_amount' and 'net_monthly_income'.
@@ -115,6 +115,7 @@ class OrchestrationService:
         try:
             profile = self._fetch_available_reclaimable_salary(reporting_period)
         except NoResultFound:
+            # Re-raise as HTTPException for the API router to catch and return 404
             raise HTTPException(
                 status_code=404, 
                 detail=f"Cannot record consent: Profile not found for period {reporting_period.isoformat()}"
