@@ -1,21 +1,26 @@
 # services/leakage_service.py
 
 from decimal import Decimal
-from typing import Dict, Any, List
+# 🚨 FIX: Added Tuple to the import list from typing
+from typing import Dict, Any, List, Tuple 
 from sqlalchemy.orm import Session
 from ..utils.ml_logic import (
-    # 🚨 Updated Import: Use all necessary ML functions
     calculate_equivalent_family_size,
     calculate_dynamic_baseline,
-    calculate_stratified_dependent_scaling # 🚨 NEW: Import SDS logic
+    calculate_stratified_dependent_scaling 
 )
-# 🚨 Fix: Cleaned up import to use UserProfile model
 from ..db.models import SalaryAllocationProfile, UserProfile 
-# 🚨 Remove the incorrect import: from ..services.ml_service import calculate_dynamic_minimal_baseline
 
 
 class LeakageService:
-    # ... (init remains the same) ...
+    """
+    Core service class for calculating financial leakage based on the 
+    Dynamic Minimal Baseline (Fin-Traq V2 Leak Finder).
+    """
+
+    def __init__(self, db: Session, user_id: str):
+        self.db = db
+        self.user_id = user_id
         
     def _fetch_profile_data(self) -> Dict[str, Any]:
         """Fetches required user financial data, including raw counts for SDS."""
@@ -34,7 +39,6 @@ class LeakageService:
         ).first()
         
         # Default EFS to 1.00 if profile is missing (single person household)
-        # 🚨 FIX: Ensure all raw inputs for SDS are fetched, defaulting to 1 adult if profile is missing
         if user_profile:
             profile_data = {
                 "equivalent_family_size": user_profile.equivalent_family_size,
@@ -56,9 +60,23 @@ class LeakageService:
             **profile_data
         }
         
-    # ... (_mock_leakage_spends remains the same, but category names should match ml_logic) ...
-    # NOTE: The categories in _mock_leakage_spends (e.g., Variable_Essential_Food) 
-    # should ideally match the categories returned by calculate_dynamic_baseline (e.g., groceries, utility)
+    def _mock_leakage_spends(self, dynamic_baselines: Dict[str, Decimal]) -> Dict[str, Decimal]:
+        """
+        MOCK DATA: Simulates categorized spends from UPI/SMS integration. [cite: 2025-10-15]
+        
+        In the real system, this data would come from categorized transactions 
+        stored in the DB (categorized spends). [cite: 2025-10-15]
+        """
+        # Actual spending for the Variable Essential categories
+        
+        # NOTE: Using the categories defined in ml_logic.py (e.g., 'groceries', 'utility')
+        mock_spends = {
+            "groceries": dynamic_baselines.get("groceries", Decimal(0)) * Decimal("1.25"), # 25% over baseline
+            "transport": dynamic_baselines.get("transport", Decimal(0)) * Decimal("0.90"), # 10% under baseline
+            "utility": dynamic_baselines.get("utility", Decimal(0)) * Decimal("1.10"), # 10% over baseline
+            "housing": dynamic_baselines.get("housing", Decimal(0)) * Decimal("1.00"), # On baseline
+        }
+        return mock_spends
 
     def _convert_raw_counts_to_sds_structure(self, raw_counts: Dict[str, int]) -> List[Tuple[str, int]]:
         """Maps raw user input counts to the stratified dependent structure required by SDS."""
@@ -77,8 +95,7 @@ class LeakageService:
         if raw_counts["num_dependents_6_to_17"] > 0:
             sds_structure.append(("child", raw_counts["num_dependents_6_to_17"]))
             
-        # NOTE: Dependents over 18 could be "additional_adult" or "elderly." 
-        # For simplicity, we'll map them as "additional_adult" for now.
+        # For simplicity, dependents over 18 are treated as additional adults for SDS.
         if raw_counts["num_dependents_over_18"] > 0:
             sds_structure.append(("additional_adult", raw_counts["num_dependents_over_18"]))
             
@@ -88,6 +105,7 @@ class LeakageService:
     def calculate_leakage(self) -> Dict[str, Any]:
         """
         Calculates leakage amount using the refined Stratified Dependent Scaling (SDS) baseline.
+        Replaces the old expense dashboard task with the 'Leakage Bucket View.' [cite: 2025-10-15]
         """
         
         profile_data = self._fetch_profile_data()
@@ -100,11 +118,42 @@ class LeakageService:
         
         # 2. Convert raw counts and apply Stratified Dependent Scaling (SDS)
         sds_structure = self._convert_raw_counts_to_sds_structure(raw_counts)
+        # Use the more accurate SDS result
         dynamic_baselines = calculate_stratified_dependent_scaling(initial_baselines, sds_structure)
         
         # 3. Get categorized spends (MOCK for now)
-        # NOTE: Renamed to match the categories in ml_logic.py
         current_spends = self._mock_leakage_spends(dynamic_baselines) 
         
-        # ... (rest of the leakage calculation logic remains the same) ...
-        # (It will now correctly use the refined dynamic_baselines from SDS)
+        leakage_buckets: List[Dict[str, Any]] = []
+        total_leakage = Decimal("0.00")
+        
+        # 4. Calculate Leakage: Leak = Max(0, Spend - Baseline)
+        for category, baseline in dynamic_baselines.items():
+            
+            spend = current_spends.get(category, Decimal("0.00"))
+            
+            # The definition of Fin-Traq "Leak": any spend amount above the 
+            # dynamically adjusted minimal baseline for that category. [cite: 2025-10-17]
+            leak_amount = max(Decimal("0.00"), spend - baseline)
+            
+            if leak_amount > Decimal("0.00"):
+                total_leakage += leak_amount
+                
+                # Build the Leakage Bucket View structure [cite: 2025-10-15]
+                leakage_buckets.append({
+                    "category": category.replace('_', ' ').title(), # Clean up category name for display
+                    "baseline": baseline.quantize(Decimal("0.01")),
+                    "spend": spend.quantize(Decimal("0.01")),
+                    "leak_amount": leak_amount.quantize(Decimal("0.01")),
+                    # Calculate percentage of overspend relative to baseline
+                    "leak_percentage": f"{(leak_amount / baseline) * 100:.2f}%" if baseline > Decimal("0.00") else "N/A"
+                })
+
+        # 5. Build reclaimable salary projection logic [cite: 2025-10-15]
+        projected_reclaimable_salary = total_leakage
+        
+        return {
+            "total_leakage_amount": total_leakage.quantize(Decimal("0.01")),
+            "projected_reclaimable_salary": projected_reclaimable_salary.quantize(Decimal("0.01")),
+            "leakage_buckets": leakage_buckets
+        }
