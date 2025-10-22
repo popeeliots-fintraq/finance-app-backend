@@ -111,4 +111,65 @@ class LeakageService:
             # Leak: Max(0, Actual Spend - Leakage Threshold)
             leak_amount = max(Decimal("0.00"), spend - threshold)
             
-            if spend > Decimal("0
+            if spend > Decimal("0.00") and leak_amount >= Decimal("0.00"): # Check if there is actual spending or overspend
+                
+                # Only add to total_leakage if it's an overspend (leak_amount > 0)
+                if leak_amount > Decimal("0.00"):
+                    total_leakage += leak_amount
+                    leak_source_description = "Above Scaled Threshold"
+                else:
+                    # If spending is below the threshold, it is a savings, not a leak for total_leakage, 
+                    # but we include it in the buckets for the Leakage View.
+                    leak_source_description = "Within Scaled Threshold (Savings)"
+                
+                # Build the Leakage Bucket View structure
+                leakage_buckets.append({
+                    "category": category.replace('_', ' ').title(), 
+                    "baseline_threshold": threshold.quantize(Decimal("0.01")),
+                    "spend": spend.quantize(Decimal("0.01")),
+                    "leak_source": leak_source_description,
+                    "leak_amount": leak_amount.quantize(Decimal("0.01")),
+                    "leak_percentage_of_spend": f"{(leak_amount / spend) * 100:.2f}%" if spend > Decimal("0.00") else "0.00%"
+                })
+        
+        # --- 2. Calculate Leakage for PURE DISCRETIONARY (PD) Categories ---
+        # 100% of this spend is a leak if not covered by a Smart Rule
+        pd_categories = ["Pure_Discretionary_DiningOut", "Pure_Discretionary_Gadget"]
+        
+        for category in pd_categories:
+            spend = current_spends.get(category, Decimal("0.00"))
+            
+            if spend > Decimal("0.00"):
+                leak_amount = spend 
+                total_leakage += leak_amount
+                
+                leakage_buckets.append({
+                    "category": category.replace('_', ' ').title(),
+                    "baseline_threshold": Decimal("0.00").quantize(Decimal("0.01")),
+                    "spend": spend.quantize(Decimal("0.01")),
+                    "leak_source": "100% Discretionary Spend",
+                    "leak_amount": leak_amount.quantize(Decimal("0.01")),
+                    "leak_percentage_of_spend": "100.00%"
+                })
+
+        # 3. Final Reclaimable Salary is the total leak found
+        projected_reclaimable_salary = total_leakage
+
+        # 🚨 CRITICAL STEP: PERSIST THE LEAKAGE RESULT TO THE DB
+        salary_profile = self.db.query(SalaryAllocationProfile).filter(
+            SalaryAllocationProfile.user_id == self.user_id,
+            SalaryAllocationProfile.reporting_period == reporting_period
+        ).first()
+
+        if salary_profile:
+            salary_profile.projected_reclaimable_salary = projected_reclaimable_salary
+            self.db.commit()
+        else:
+            raise NoResultFound(f"Salary Allocation Profile not found for period {reporting_period}. Cannot save leak.")
+
+        # 4. Return the calculated data for immediate display
+        return {
+            "total_leakage_amount": total_leakage.quantize(Decimal("0.01")),
+            "projected_reclaimable_salary": projected_reclaimable_salary.quantize(Decimal("0.01")),
+            "leakage_buckets": leakage_buckets
+        }
