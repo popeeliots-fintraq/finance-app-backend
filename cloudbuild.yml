@@ -1,0 +1,11 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  id: Build-and-Tag-Image
+  args: ['build', '-f', 'Dockerfile.staging', '-t', '${_IMAGE_NAME}', '.']
+
+images:
+- '${_IMAGE_NAME}'
+
+substitutions:
+  # The final destination for the Fin-Traq categorization API image
+  _IMAGE_NAME: gcr.io/popeeliots-fintraq/transaction-categorizer:latest
