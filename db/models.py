@@ -1,6 +1,6 @@
-# db/models.py
+# db/models.py - Corrected and ready to paste
 
-from sqlalchemy import Column, String, DECIMAL, Date, ForeignKey, PrimaryKeyConstraint
+from sqlalchemy import Column, Integer, String, DECIMAL, Date, ForeignKey, PrimaryKeyConstraint
 from decimal import Decimal
 from .base import Base 
 
@@ -12,7 +12,9 @@ class SalaryAllocationProfile(Base):
 
     __tablename__ = "salary_allocation_profile"
 
-    user_id = Column(String(255), ForeignKey('users.user_id'), nullable=False)
+    # FIX: Changed to Integer and ForeignKey now points to 'users.id' to match db/base.py
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    
     reporting_period = Column(Date, nullable=False)
     net_monthly_income = Column(DECIMAL(10, 2), nullable=False)
     fixed_commitment_total = Column(DECIMAL(10, 2), nullable=False)
