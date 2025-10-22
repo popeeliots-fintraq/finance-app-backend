@@ -26,10 +26,5 @@ COPY . /app
 EXPOSE 8080
 
 # 4. Production-Ready Command (Using Gunicorn with Uvicorn workers)
-# CRITICAL: 'app.main:app' assumes your application object 'app' is in a file at 'app/main.py'.
-# Adjust 'app.main:app' if your entry file/object is different (e.g., 'main:app' for main.py).
-CMD ["gunicorn", "main:app", \
-     "--workers", "4", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:$PORT", \
-     "--timeout", "120"]
+# FIX: Use the shell form (without the JSON array) to allow $PORT variable substitution.
+CMD gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
