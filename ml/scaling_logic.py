@@ -1,64 +1,58 @@
-# ml/scaling_logic.py
+# ml/scaling_logic.py (Updated for Leakage Threshold < DMB)
 
-from decimal import Decimal
+from decimal import Decimal, getcontext
 from typing import Dict, Any
 
-# Define Standardized Weights for Dependent Categories [cite: 2025-10-20]
-# These weights represent the proportional cost factor relative to the single-adult baseline.
-# These values are examples and would be tuned with real data.
+# Set precision for Decimal operations
+getcontext().prec = 4 
+
+# Define Standardized Weights for Dependent Categories (Used for internal distribution)
 DEPENDENT_CATEGORY_WEIGHTS: Dict[str, Decimal] = {
-    # Essential variable spending categories that are highly affected by household size
-    "Variable_Essential_Food": Decimal("0.55"),  # Food spending is highly scalable
-    "Variable_Essential_Transport": Decimal("0.30"), # Transport costs scale moderately
-    "Variable_Essential_Health": Decimal("0.65"),  # Health costs scale highly
-    # Other dependent categories can be added here
+    "Variable_Essential_Food": Decimal("0.55"),
+    "Variable_Essential_Transport": Decimal("0.30"),
+    "Variable_Essential_Health": Decimal("0.65"),
 }
 
-# Define the ML Logic Engine for Stratified Dependent Scaling (Fin-Traq V2) [cite: 2025-10-20]
+# --- V2 LEAKAGE BUFFER CONSTANT (15% LESS THAN DMB) ---
+# This constant defines the intentional margin (savings opportunity) below the DMB.
+LEAK_SAVINGS_MARGIN_PERCENTAGE = Decimal("0.15") 
+BASE_ALLOCATION_RATE = Decimal("0.20") 
+
+# Define the ML Logic Engine for Stratified Dependent Scaling (Fin-Traq V2)
 def calculate_dynamic_baseline(
     net_income: Decimal, 
     equivalent_family_size: Decimal,
     category_weights: Dict[str, Decimal] = DEPENDENT_CATEGORY_WEIGHTS
 ) -> Dict[str, Decimal]:
     """
-    Updates the core ML logic for dynamic baseline adjustment using the EFS. [cite: 2025-10-20]
-    
-    This function simulates how the EFS factor adjusts the 'minimal acceptable' 
-    spending baseline for core variable categories, helping to identify "leaks" (overspending 
-    relative to need). [cite: 2025-10-15, 2025-10-20]
-    
-    Args:
-        net_income: The user's net monthly income.
-        equivalent_family_size: The EFS factor calculated from user_profile.
-        category_weights: Standardized weights for different dependent categories.
-        
-    Returns:
-        A dictionary of adjusted minimal baseline amounts per category.
+    Calculates the Dynamic Minimal Baseline (DMB) and sets the Leakage Threshold 
+    15% below the DMB, creating an immediate, visible savings opportunity.
     """
     
-    # 🚨 NOTE: Base_Allocation_Rate is a simplified placeholder. In a real ML model, 
-    # this would come from a regression model based on income quintiles, location, etc.
-    BASE_ALLOCATION_RATE = Decimal("0.20") # 20% of income for total Variable Essential
+    # 1. Calculate the Dynamic Minimal Baseline (DMB) - The absolute lowest need
+    total_minimal_need_dmb = net_income * BASE_ALLOCATION_RATE * equivalent_family_size
     
-    # 1. Calculate the base minimal allocation amount for Variable Essential spending
-    total_variable_base = net_income * BASE_ALLOCATION_RATE
+    # 2. Establish the Leakage Threshold (15% below DMB)
+    # Threshold = DMB * (1 - 0.15)
+    leakage_threshold_multiplier = Decimal("1.0") - LEAK_SAVINGS_MARGIN_PERCENTAGE
+    final_leakage_threshold = total_minimal_need_dmb * leakage_threshold_multiplier
     
-    # 2. Apply Dynamic Baseline Adjustment using EFS
-    # The EFS acts as a multiplier to scale the total base amount to the household size.
-    # EFS = 1.00 (single adult) means no scaling. EFS = 1.75 means 75% more baseline spending needed.
-    dynamically_adjusted_total_base = total_variable_base * equivalent_family_size
-    
-    # 3. Stratified Scaling by Category
+    # 3. Stratified Scaling by Category (using the final Leakage Threshold)
     dynamic_baselines = {}
+    sum_of_weights = sum(category_weights.values())
     
     for category, weight in category_weights.items():
-        # Distribute the dynamically adjusted total base across weighted categories
-        # The sum of all weights should ideally equal 1.00 for clean distribution.
-        # This implementation scales the total based on each category's relative importance (weight).
-        baseline_amount = dynamically_adjusted_total_base * weight 
+        proportional_share = weight / sum_of_weights
+        
+        # This is the CATEGORY-SPECIFIC Leakage Threshold
+        baseline_amount = final_leakage_threshold * proportional_share
         dynamic_baselines[category] = baseline_amount.quantize(Decimal("0.01"))
         
-    # Example: return the adjusted total baseline (used for leakage assessment)
-    dynamic_baselines["Total_Dynamic_Baseline"] = dynamically_adjusted_total_base.quantize(Decimal("0.01"))
-    
+    # Final outputs for the backend Orchestration System
+    dynamic_baselines["Total_Leakage_Threshold"] = final_leakage_threshold.quantize(Decimal("0.01"))
+    dynamic_baselines["Total_Minimal_Need_DMB"] = total_minimal_need_dmb.quantize(Decimal("0.01"))
+
+    # The actual recoverable amount is the difference between DMB and the Threshold
+    dynamic_baselines["Potential_Recoverable_Fund"] = (total_minimal_need_dmb - final_leakage_threshold).quantize(Decimal("0.01"))
+
     return dynamic_baselines
