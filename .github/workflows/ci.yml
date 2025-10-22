@@ -110,14 +110,14 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE_URL }}
           
-          # FIX: Use the 'env_vars' input for environment variables
-          **env_vars: |**
+          # CORRECTED: Use the dedicated 'env_vars' input for environment variables (for Fin-Traq V2 ML logic)
+          env_vars: |
             ML_EFS_ENABLED=true
             ML_WEIGHTS_VERSION=v2.0
             
-          # FIX: Use the 'secrets' input for Secret Manager references
-          **secrets: |**
+          # CORRECTED: Use the dedicated 'secrets' input for Secret Manager references (for database connection)
+          secrets: |
             DB_CONNECTION_URL=FIN_TRAQ_DB_URL:latest
             
-          # FIX: Use the 'flags' input for custom gcloud flags (like turning off unauthenticated access)
-          **flags: --no-allow-unauthenticated**
+          # CORRECTED: Use the 'flags' input for custom gcloud run flags (like disabling unauthenticated access)
+          flags: --no-allow-unauthenticated
