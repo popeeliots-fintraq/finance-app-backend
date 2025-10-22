@@ -1,41 +1,122 @@
+# .github/workflows/deploy.yml
 name: Python Backend CI/CD (Fin-Traq V2)
 
 on:
   push:
+    # Trigger deployment only on the main branch after tests pass
     branches: [ "main" ]
+  # Run tests on Pull Requests against main
   pull_request:
     branches: [ "main" ]
+  # Allow manual runs from the GitHub Actions tab
+  workflow_dispatch:
+
+env:
+  # === Fin-Traq V2 Deployment Configuration (CONFIRMED VALUES) ===
+  PROJECT_ID: popeelots-fintraq # Confirmed from your Cloud Console URL and screenshots
+  SERVICE_NAME: fintraq-backend # Confirmed from Cloud Run services
+  REGION: us-central1 # Confirmed from Cloud Run/Artifact Registry locations
+  
+  # Artifact Registry Config
+  ARTIFACT_REGISTRY: fintraq-backend # Confirmed from Artifact Registry list
+  IMAGE_NAME: fintraq-backend-v2-image
+  # ==========================================================
 
 jobs:
+  # ---------------------
+  # 1. CONTINUOUS INTEGRATION: Test, Lint, and Structural Check
+  # ---------------------
   test-and-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
           cache: 'pip'
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Quality Tools
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Install quality tools
           pip install flake8
-
+      
+      # NOTE: Your existing Flake8 and Python checks are here.
       - name: Run Flake8 Linter Check
         run: |
-          # Stop the build if there are Python syntax errors or undefined names
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Warning on complexity and style violations
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
-
-      - name: Run Database Initialization (Pre-Deployment Check)
+      
+      # Assuming 'db/base.py' is the correct path for your User Data Schema and EFS implementation logic
+      - name: Run Model Initialization Check
         run: |
-          echo "Running model import test..."
-          python -c "from db.base import Base; print('Models imported successfully')"
+          echo "Testing import of core DB/Schema (User Data Schema, EFS implementation)..."
+          python -c "from db.base import Base; print('Core models/schema imported successfully')"
           
       - name: Basic API Health Check
-        run: echo "Code quality check passed. Ready for deployment configuration."
+        run: echo "Code quality check passed. Proceeding to deployment."
+
+  # ---------------------
+  # 2. CONTINUOUS DEPLOYMENT: Build, Push, and Deploy to Cloud Run
+  # ---------------------
+  deploy:
+    # This job will only run if the 'test-and-lint' job is successful
+    needs: test-and-lint
+    
+    # Only run the deploy job on pushes to the 'main' branch, not PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Authenticate to Google Cloud
+      - name: 'Authenticate to GCP'
+        id: auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          # Uses the JSON key stored as a GitHub Secret
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 2. Configure Docker for Artifact Registry
+      - name: 'Configure Docker for Artifact Registry'
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      # 3. Build and Push the Docker Image
+      - name: Build and Push Docker Image
+        run: |
+          # Create the fully qualified image name using the commit SHA as the tag
+          FULL_IMAGE_NAME=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          
+          # Build the image using the optimized Dockerfile
+          # (Assumes the Dockerfile is in the root directory)
+          docker build -t $FULL_IMAGE_NAME .
+          
+          # Push the image to Artifact Registry
+          docker push $FULL_IMAGE_NAME
+          
+          # Save the image URL for the deployment step
+          echo "IMAGE_URL=$FULL_IMAGE_NAME" >> $GITHUB_ENV 
+
+      # 4. Deploy to Google Cloud Run
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE_URL }}
+          
+          # Set essential Cloud Run parameters here for Fin-Traq V2 ML Logic and Database.
+          env_vars: |
+            ML_EFS_ENABLED=true  # Implements Equivalent Family Size (EFS) calculation [cite: 2025-10-20]
+            ML_WEIGHTS_VERSION=v2.0 # Defines standardized weights for dependent categories [cite: 2025-10-20]
+          secrets: |
+            # Attaches the FIN_TRAQ_DB_URL secret from Secret Manager to the service
+            DB_CONNECTION_URL=${{ env.PROJECT_ID }}/FIN_TRAQ_DB_URL:latest #
+            
+          # IMPORTANT: Set to 'false' because the service is a Locked Backend Financial Orchestration System
+          allow_unauthenticated: false
