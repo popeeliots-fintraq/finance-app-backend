@@ -13,7 +13,7 @@ on:
 
 env:
   # === Fin-Traq V2 Deployment Configuration (CONFIRMED VALUES) ===
-  PROJECT_ID: popeelots-fintraq # Confirmed from your Cloud Console URL and screenshots
+  PROJECT_ID: popeeliots-fintraq # Confirmed from your Cloud Console URL and screenshots
   SERVICE_NAME: fintraq-backend # Confirmed from Cloud Run services
   REGION: us-central1 # Confirmed from Cloud Run/Artifact Registry locations
   
