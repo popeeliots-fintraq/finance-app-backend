@@ -3,13 +3,17 @@
 from decimal import Decimal
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
-from datetime import date
+from datetime import date, datetime # <--- Added datetime for profile timestamp
 from sqlalchemy.exc import NoResultFound
-# 🚨 FIX: Import HTTPException for service-layer error handling
-from fastapi import HTTPException 
+from fastapi import HTTPException, status # <--- Added status import
 
-# Import models
+# 🚨 FIX: Import the models needed for EFS calculation
+from ..db.base import User, FinancialProfile
+# Import other models (adjust path if needed)
 from ..db.models import SalaryAllocationProfile, SmartTransferRule 
+# 🚨 FIX: Import EFS Calculator
+from ..ml.efs_calculator import calculate_equivalent_family_size
+
 
 class OrchestrationService:
     """
@@ -18,10 +22,57 @@ class OrchestrationService:
     salary and user-defined Smart Rules (Goals, Tax Savings) [cite: 2025-10-15].
     """
 
-    def __init__(self, db: Session, user_id: str):
+    def __init__(self, db: Session, user_id: int): # <--- Changed user_id to int for SQLAlchemy
         self.db = db
         self.user_id = user_id
         
+    # ----------------------------------------------------------------------
+    # V2 ML LOGIC INTEGRATION (EFS Calculation)
+    # ----------------------------------------------------------------------
+    def calculate_and_save_efs(self) -> FinancialProfile:
+        """
+        Calculates the Equivalent Family Size (EFS) and updates the user's 
+        FinancialProfile. This MUST run before leakage calculation.
+        """
+        
+        # 1. Fetch User Data
+        user = self.db.query(User).filter(User.id == self.user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User ID {self.user_id} not found."
+            )
+            
+        # 2. Fetch or Create Financial Profile
+        profile = self.db.query(FinancialProfile).filter(FinancialProfile.user_id == self.user_id).first()
+        if not profile:
+            profile = FinancialProfile(user_id=self.user_id)
+            self.db.add(profile)
+            self.db.flush() 
+
+        # 3. Prepare Input Data for EFS Calculator
+        profile_data = {
+            'num_adults': user.num_adults,
+            'num_dependents_under_6': user.num_dependents_under_6,
+            'num_dependents_6_to_17': user.num_dependents_6_to_17,
+            'num_dependents_over_18': user.num_dependents_over_18,
+        }
+
+        # 4. Calculate EFS and Update Profile
+        new_efs_value = calculate_equivalent_family_size(profile_data)
+        
+        profile.e_family_size = new_efs_value
+        profile.last_calculated_at = datetime.utcnow()
+        
+        # NOTE: baseline_adjustment_factor update will be added here next
+        
+        self.db.commit()
+        return profile
+
+    # ----------------------------------------------------------------------
+    # HELPER AND CORE ORCHESTRATION LOGIC (EXISTING METHODS)
+    # ----------------------------------------------------------------------
+    
     def _fetch_available_reclaimable_salary(self, reporting_period: date) -> SalaryAllocationProfile:
         """Fetches the latest calculated salary profile for the period."""
         
@@ -38,6 +89,7 @@ class OrchestrationService:
 
 
     def generate_consent_suggestion_plan(self, reporting_period: date) -> Dict[str, Any]:
+        # ... (Existing code remains the same)
         """
         Calculates how the reclaimable fund SHOULD be allocated 
         across active Smart Rules, generating a suggestion plan (not a transfer plan).
@@ -101,16 +153,11 @@ class OrchestrationService:
             "message": "Consent suggestion plan generated based on Smart Rules and reclaimable salary."
         }
 
-    # ----------------------------------------------------------------------
-    # CONSENT MOVE EXECUTION LOGIC 
-    # ----------------------------------------------------------------------
 
     def record_consent_and_update_balance(self, consented_amount: Decimal, reporting_period: date) -> Dict[str, Any]:
+        # ... (Existing code remains the same)
         """
         Records the user's consent to 'move' the fund internally for display purposes.
-        
-        NOTE: This requires the SalaryAllocationProfile model to have 
-              'consented_move_amount' and 'net_monthly_income'.
         """
         try:
             profile = self._fetch_available_reclaimable_salary(reporting_period)
@@ -120,7 +167,7 @@ class OrchestrationService:
                 status_code=404, 
                 detail=f"Cannot record consent: Profile not found for period {reporting_period.isoformat()}"
             )
-        
+            
         # 1. Validation: Ensure the user is not consenting to move more than available
         if consented_amount > profile.projected_reclaimable_salary:
             raise HTTPException(
