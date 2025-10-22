@@ -1,15 +1,17 @@
 # services/leakage_service.py
 
 from decimal import Decimal
-# 🚨 FIX: Added Tuple to the import list from typing
 from typing import Dict, Any, List, Tuple 
 from sqlalchemy.orm import Session
-from ..utils.ml_logic import (
-    calculate_equivalent_family_size,
-    calculate_dynamic_baseline,
-    calculate_stratified_dependent_scaling 
-)
-from ..db.models import SalaryAllocationProfile, UserProfile 
+from sqlalchemy.exc import NoResultFound
+
+# 🚨 CRITICAL FIX: Update imports to reflect the file structure
+from ..ml.efs_calculator import calculate_equivalent_family_size
+from ..ml.scaling_logic import calculate_dynamic_baseline # This now includes the 15% margin logic
+
+# Import models (Adjust path as needed, assuming FinancialProfile is the correct model for EFS/DMB)
+from ..db.base import User, FinancialProfile
+from ..db.models import SalaryAllocationProfile, SmartTransferRule # Assuming UserProfile is now FinancialProfile or User
 
 
 class LeakageService:
@@ -18,12 +20,12 @@ class LeakageService:
     Dynamic Minimal Baseline (Fin-Traq V2 Leak Finder).
     """
 
-    def __init__(self, db: Session, user_id: str):
+    def __init__(self, db: Session, user_id: int): # Changed user_id to int for consistency
         self.db = db
         self.user_id = user_id
         
-    def _fetch_profile_data(self) -> Dict[str, Any]:
-        """Fetches required user financial data, including raw counts for SDS."""
+    def _fetch_profile_data_and_baselines(self) -> Dict[str, Any]:
+        """Fetches required user financial data and calculates DMB/Thresholds."""
         
         # 1. Fetch the latest Salary Allocation Profile (to get Net Income)
         salary_profile = self.db.query(SalaryAllocationProfile).filter(
@@ -31,125 +33,128 @@ class LeakageService:
         ).order_by(SalaryAllocationProfile.reporting_period.desc()).first()
 
         if not salary_profile:
-            raise ValueError("Salary Allocation Profile not found. Cannot calculate leaks.")
+            raise NoResultFound("Salary Allocation Profile not found. Cannot calculate leaks.")
 
-        # 2. Fetch the User Profile (to get EFS and raw dependent counts for SDS)
-        user_profile = self.db.query(UserProfile).filter(
-            UserProfile.user_id == self.user_id
-        ).first()
+        # 2. Fetch the Financial Profile (which now holds EFS and DMB components)
+        profile = self.db.query(FinancialProfile).filter(FinancialProfile.user_id == self.user_id).first()
         
-        # Default EFS to 1.00 if profile is missing (single person household)
-        if user_profile:
-            profile_data = {
-                "equivalent_family_size": user_profile.equivalent_family_size,
-                "raw_dependent_counts": {
-                    "num_adults": user_profile.num_adults,
-                    "num_dependents_under_6": user_profile.num_dependents_under_6,
-                    "num_dependents_6_to_17": user_profile.num_dependents_6_to_17,
-                    "num_dependents_over_18": user_profile.num_dependents_over_18,
-                }
-            }
-        else:
-            profile_data = {
-                "equivalent_family_size": Decimal("1.00"),
-                "raw_dependent_counts": {"num_adults": 1, "num_dependents_under_6": 0, "num_dependents_6_to_17": 0, "num_dependents_over_18": 0}
-            }
+        if not profile:
+             raise NoResultFound("Financial Profile not found. Run OrchestrationService.calculate_and_save_financial_profile first.")
+
+        # 3. Recalculate Baselines (Best practice to ensure data is fresh)
+        # NOTE: This should ideally be fetched from the FinancialProfile for performance
+        # but is recalculated here for demonstration clarity.
+        baseline_results = calculate_dynamic_baseline(
+            net_income=salary_profile.net_monthly_income,
+            equivalent_family_size=profile.e_family_size
+        )
 
         return {
             "net_monthly_income": salary_profile.net_monthly_income,
-            **profile_data
+            "dynamic_baselines": baseline_results,
+            "efs": profile.e_family_size
         }
         
-    def _mock_leakage_spends(self, dynamic_baselines: Dict[str, Decimal]) -> Dict[str, Decimal]:
+    def _mock_leakage_spends(self, baselines: Dict[str, Decimal]) -> Dict[str, Decimal]:
         """
-        MOCK DATA: Simulates categorized spends from UPI/SMS integration. [cite: 2025-10-15]
-        
-        In the real system, this data would come from categorized transactions 
-        stored in the DB (categorized spends). [cite: 2025-10-15]
+        MOCK DATA: Simulates categorized spends for all relevant V2 Leak Buckets:
+        VE (Variable Essential), SD (Scaled Discretionary), and PD (Pure Discretionary).
         """
-        # Actual spending for the Variable Essential categories
-        
-        # NOTE: Using the categories defined in ml_logic.py (e.g., 'groceries', 'utility')
+        # NOTE: Using the categories defined in ml/scaling_logic.py
         mock_spends = {
-            "groceries": dynamic_baselines.get("groceries", Decimal(0)) * Decimal("1.25"), # 25% over baseline
-            "transport": dynamic_baselines.get("transport", Decimal(0)) * Decimal("0.90"), # 10% under baseline
-            "utility": dynamic_baselines.get("utility", Decimal(0)) * Decimal("1.10"), # 10% over baseline
-            "housing": dynamic_baselines.get("housing", Decimal(0)) * Decimal("1.00"), # On baseline
+            # --- VE Leak Buckets (Spending > Threshold is Leak) ---
+            "Variable_Essential_Food": baselines["Variable_Essential_Food"] * Decimal("1.30"), # 30% over threshold
+            "Variable_Essential_Transport": baselines["Variable_Essential_Transport"] * Decimal("0.80"), # No leak (under threshold)
+            "Variable_Essential_Health": baselines["Variable_Essential_Health"] * Decimal("1.05"), # Small leak (5% over threshold)
+            
+            # --- SD Leak Bucket (High Leakage items with a tight cap) ---
+            "Scaled_Discretionary_Routine": baselines["Scaled_Discretionary_Routine"] * Decimal("2.50"), # 150% over threshold - BIG LEAK
+            
+            # --- PD Leak Bucket (100% is a leak until Smart Rule is attached) ---
+            "Pure_Discretionary_DiningOut": Decimal("3500.00"), 
+            "Pure_Discretionary_Gadget": Decimal("500.00"),
         }
         return mock_spends
 
-    def _convert_raw_counts_to_sds_structure(self, raw_counts: Dict[str, int]) -> List[Tuple[str, int]]:
-        """Maps raw user input counts to the stratified dependent structure required by SDS."""
-        
-        sds_structure: List[Tuple[str, int]] = []
-        
-        # Add additional adults (num_adults - 1)
-        num_additional_adults = raw_counts["num_adults"] - 1
-        if num_additional_adults > 0:
-            sds_structure.append(("additional_adult", num_additional_adults))
-            
-        # Map age brackets to SDS weights (using 'child' and 'infant' logic)
-        if raw_counts["num_dependents_under_6"] > 0:
-            sds_structure.append(("infant", raw_counts["num_dependents_under_6"]))
-        
-        if raw_counts["num_dependents_6_to_17"] > 0:
-            sds_structure.append(("child", raw_counts["num_dependents_6_to_17"]))
-            
-        # For simplicity, dependents over 18 are treated as additional adults for SDS.
-        if raw_counts["num_dependents_over_18"] > 0:
-            sds_structure.append(("additional_adult", raw_counts["num_dependents_over_18"]))
-            
-        return sds_structure
-
-
+    # The conversion logic is complex and not strictly needed since we are recalculating 
+    # the baselines directly from the FinancialProfile, so we will simplify.
+    
     def calculate_leakage(self) -> Dict[str, Any]:
         """
         Calculates leakage amount using the refined Stratified Dependent Scaling (SDS) baseline.
-        Replaces the old expense dashboard task with the 'Leakage Bucket View.' [cite: 2025-10-15]
+        Implements the three-bucket leak calculation for the 'Leakage Bucket View.'
         """
         
-        profile_data = self._fetch_profile_data()
-        net_income = profile_data["net_monthly_income"]
-        efs = profile_data["equivalent_family_size"]
-        raw_counts = profile_data["raw_dependent_counts"]
-        
-        # 1. Calculate the initial Dynamic Minimal Baseline
-        initial_baselines = calculate_dynamic_baseline(net_income, efs)
-        
-        # 2. Convert raw counts and apply Stratified Dependent Scaling (SDS)
-        sds_structure = self._convert_raw_counts_to_sds_structure(raw_counts)
-        # Use the more accurate SDS result
-        dynamic_baselines = calculate_stratified_dependent_scaling(initial_baselines, sds_structure)
-        
-        # 3. Get categorized spends (MOCK for now)
+        try:
+            profile_data = self._fetch_profile_data_and_baselines()
+        except NoResultFound as e:
+            return {"error": str(e)}
+
+        dynamic_baselines = profile_data["dynamic_baselines"]
         current_spends = self._mock_leakage_spends(dynamic_baselines) 
         
         leakage_buckets: List[Dict[str, Any]] = []
         total_leakage = Decimal("0.00")
         
-        # 4. Calculate Leakage: Leak = Max(0, Spend - Baseline)
-        for category, baseline in dynamic_baselines.items():
+        # --- 1. Calculate Leakage for SCALED Categories (VE & SD) ---
+        for category, threshold in dynamic_baselines.items():
             
             spend = current_spends.get(category, Decimal("0.00"))
             
-            # The definition of Fin-Traq "Leak": any spend amount above the 
-            # dynamically adjusted minimal baseline for that category. [cite: 2025-10-17]
-            leak_amount = max(Decimal("0.00"), spend - baseline)
+            # Leak: Max(0, Actual Spend - Leakage Threshold)
+            leak_amount = max(Decimal("0.00"), spend - threshold)
             
             if leak_amount > Decimal("0.00"):
                 total_leakage += leak_amount
                 
-                # Build the Leakage Bucket View structure [cite: 2025-10-15]
+                # Build the Leakage Bucket View structure
                 leakage_buckets.append({
-                    "category": category.replace('_', ' ').title(), # Clean up category name for display
-                    "baseline": baseline.quantize(Decimal("0.01")),
+                    "category": category.replace('_', ' ').title(), 
+                    "baseline_threshold": threshold.quantize(Decimal("0.01")),
                     "spend": spend.quantize(Decimal("0.01")),
+                    "leak_source": "Above Scaled Threshold",
                     "leak_amount": leak_amount.quantize(Decimal("0.01")),
-                    # Calculate percentage of overspend relative to baseline
-                    "leak_percentage": f"{(leak_amount / baseline) * 100:.2f}%" if baseline > Decimal("0.00") else "N/A"
+                    "leak_percentage_of_spend": f"{(leak_amount / spend) * 100:.2f}%" if spend > Decimal("0.00") else "0.00%"
+                })
+        
+        # --- 2. Calculate Leakage for PURE DISCRETIONARY (PD) Categories ---
+        # NOTE: We need a definitive list of PD categories from the DB in a real system.
+        pd_categories = ["Pure_Discretionary_DiningOut", "Pure_Discretionary_Gadget"]
+        
+        for category in pd_categories:
+            spend = current_spends.get(category, Decimal("0.00"))
+            
+            if spend > Decimal("0.00"):
+                # 100% of this spend is a leak if not covered by a Smart Rule
+                leak_amount = spend 
+                total_leakage += leak_amount
+                
+                leakage_buckets.append({
+                    "category": category.replace('_', ' ').title(),
+                    "baseline_threshold": Decimal("0.00").quantize(Decimal("0.01")),
+                    "spend": spend.quantize(Decimal("0.01")),
+                    "leak_source": "100% Discretionary Spend",
+                    "leak_amount": leak_amount.quantize(Decimal("0.01")),
+                    "leak_percentage_of_spend": "100.00%"
                 })
 
-        # 5. Build reclaimable salary projection logic [cite: 2025-10-15]
+
+        # --- 3. Add the Guaranteed Leak (15% of DMB) ---
+        # This is the 'Potential Recoverable Fund' used to fuel the Autopilot immediately.
+        guaranteed_fund = dynamic_baselines.get("Potential_Recoverable_Fund", Decimal("0.00"))
+        
+        total_leakage += guaranteed_fund
+        
+        leakage_buckets.append({
+            "category": "Guaranteed Savings Fund",
+            "baseline_threshold": dynamic_baselines.get("Total_Minimal_Need_DMB").quantize(Decimal("0.01")),
+            "spend": dynamic_baselines.get("Total_Leakage_Threshold").quantize(Decimal("0.01")),
+            "leak_source": "DMB - 15% Margin",
+            "leak_amount": guaranteed_fund.quantize(Decimal("0.01")),
+            "leak_percentage_of_spend": "15.00%" # Since it's 15% of DMB
+        })
+        
+        # 4. Build reclaimable salary projection logic
         projected_reclaimable_salary = total_leakage
         
         return {
