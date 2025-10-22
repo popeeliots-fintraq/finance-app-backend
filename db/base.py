@@ -14,12 +14,10 @@ class Base(DeclarativeBase):
     pass
 
 # --- 2. Core User Model Update (User) ---
-# NOTE: Replace the contents of this class with your existing User fields, 
-# ensuring you include the 'num_dependents' field.
 class User(Base):
     __tablename__ = "users"
 
-    # Core Identifiers (PLACEHOLDER - UPDATE WITH YOUR ACTUAL FIELDS)
+    # Core Identifiers (PLACEHOLDER - ASSUME THESE ARE YOUR EXISTING FIELDS)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String)
@@ -27,9 +25,11 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     monthly_salary: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), default=Decimal('0.00'))
 
-    # 🚨 CRITICAL V2 INPUT: Required for EFS Calculation
-    # Stores the total number of people dependent on this user's salary (includes self + others)
-    num_dependents: Mapped[int] = mapped_column(Integer, default=1) 
+    # 🚨 V2 CRITICAL INPUTS: Replaces the old 'num_dependents' field
+    num_adults: Mapped[int] = mapped_column(Integer, default=1) # User + Spouse/Partner
+    num_dependents_under_6: Mapped[int] = mapped_column(Integer, default=0) 
+    num_dependents_6_to_17: Mapped[int] = mapped_column(Integer, default=0) 
+    num_dependents_over_18: Mapped[int] = mapped_column(Integer, default=0) 
 
 
 # --- 3. New V2 Model (FinancialProfile) ---
@@ -56,10 +56,3 @@ class FinancialProfile(Base):
     
     # Timestamp of the last successful V2 calculation
     last_calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-# NOTE: Remove or update any old imports that reference external models 
-# if you are consolidating them here.
-# from . import models
-# from . import user_profile
-# from . import smart_transfer_rule
