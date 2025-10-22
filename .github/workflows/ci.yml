@@ -110,13 +110,11 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE_URL }}
           
-          # Set essential Cloud Run parameters here for Fin-Traq V2 ML Logic and Database.
-          env_vars: |
-            ML_EFS_ENABLED=true  # Implements Equivalent Family Size (EFS) calculation [cite: 2025-10-20]
-            ML_WEIGHTS_VERSION=v2.0 # Defines standardized weights for dependent categories [cite: 2025-10-20]
-          secrets: |
-            # Attaches the FIN_TRAQ_DB_URL secret from Secret Manager to the service
-            DB_CONNECTION_URL=${{ env.PROJECT_ID }}/FIN_TRAQ_DB_URL:latest #
-            
           # IMPORTANT: Set to 'false' because the service is a Locked Backend Financial Orchestration System
           allow_unauthenticated: false
+
+          # FIX: Use the 'args' input for custom gcloud flags, and use clean comma-separated format.
+          args: |
+            --update-env-vars ML_EFS_ENABLED=true,ML_WEIGHTS_VERSION=v2.0
+            --update-secrets DB_CONNECTION_URL=FIN_TRAQ_DB_URL:latest
+            --update-labels managed-by=github-actions,commit-sha=${{ github.sha }}
