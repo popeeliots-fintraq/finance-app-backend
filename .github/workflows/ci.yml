@@ -110,11 +110,14 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE_URL }}
           
-          # IMPORTANT: Set to 'false' because the service is a Locked Backend Financial Orchestration System
-          allow_unauthenticated: false
-
-          # FIX: Use the 'args' input for custom gcloud flags, and use clean comma-separated format.
-          args: |
-            --update-env-vars ML_EFS_ENABLED=true,ML_WEIGHTS_VERSION=v2.0
-            --update-secrets DB_CONNECTION_URL=FIN_TRAQ_DB_URL:latest
-            --update-labels managed-by=github-actions,commit-sha=${{ github.sha }}
+          # FIX: Use the 'env_vars' input for environment variables
+          **env_vars: |**
+            ML_EFS_ENABLED=true
+            ML_WEIGHTS_VERSION=v2.0
+            
+          # FIX: Use the 'secrets' input for Secret Manager references
+          **secrets: |**
+            DB_CONNECTION_URL=FIN_TRAQ_DB_URL:latest
+            
+          # FIX: Use the 'flags' input for custom gcloud flags (like turning off unauthenticated access)
+          **flags: --no-allow-unauthenticated**
