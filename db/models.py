@@ -1,5 +1,3 @@
-# db/models.py - Corrected and ready to paste
-
 from sqlalchemy import Column, Integer, String, DECIMAL, Date, ForeignKey, PrimaryKeyConstraint
 from decimal import Decimal
 from .base import Base 
@@ -17,11 +15,15 @@ class SalaryAllocationProfile(Base):
     
     reporting_period = Column(Date, nullable=False)
     net_monthly_income = Column(DECIMAL(10, 2), nullable=False)
-    fixed_commitment_total = Column(DECIMAL(10, 2), nullable=False)
+    fixed_commitment_total = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
     target_savings_rate = Column(DECIMAL(5, 2), nullable=False, default=Decimal("0.00"))
 
-    projected_discretionary_float = Column(DECIMAL(10, 2), nullable=False)
+    projected_discretionary_float = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
     
+    # 🚨 CRITICAL ADDITION: Variable Spend Total
+    # Required for Benchmarking Service and Reconciliation Service
+    variable_spend_total = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00")) 
+
     # 🚨 V2 ADDITION 1: Leak Finder Output (Money found and available for suggestion)
     projected_reclaimable_salary = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
     
