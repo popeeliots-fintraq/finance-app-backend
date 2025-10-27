@@ -78,4 +78,54 @@ class FixedCommitmentService:
             # Count the number of unique months in which this category had a transaction
             unique_months = len(set(tx.transaction_date.replace(day=1) for tx in fixed_transactions if tx.category == category))
             
-            # Check for fixed recurrence (e.g.,
+            # Check for fixed recurrence (e.g., 2/4 months or 1/4 for large annual payments)
+            if unique_months < LOOKBACK_MONTHS * OCCURRENCE_THRESHOLD:
+                # If the transaction is too sporadic, we skip it or categorize it differently
+                # For Fin-Traq V2, we assume anything in FIXED_COMMITMENT_CATEGORIES is critical.
+                pass 
+            
+            # Calculate the total spend in this category over the lookback period
+            total_spend = sum(amounts)
+            
+            # Normalize the total spend to a monthly average over the lookback period
+            monthly_average = total_spend / LOOKBACK_MONTHS
+            
+            # Add to the running total
+            projected_total += monthly_average
+
+        # Round the final result
+        return projected_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def orchestrate_update(self, reporting_period: date) -> Decimal:
+        """
+        Calculates the fixed total and updates the SalaryAllocationProfile.
+        This is the method called by the main Orchestration Service.
+        """
+        
+        # 1. Calculate the fixed total
+        calculated_fixed_total = self.calculate_fixed_total(reporting_period)
+        
+        # 2. Fetch or create the SalaryAllocationProfile for the month
+        salary_profile = self.db.query(SalaryAllocationProfile).filter(
+            SalaryAllocationProfile.user_id == self.user_id,
+            SalaryAllocationProfile.reporting_period == reporting_period
+        ).first()
+
+        if not salary_profile:
+            # 🚨 FAILURE PREVENTION: If profile doesn't exist, create a minimal one.
+            # Assuming you have a service to get the latest net income (or fetch it from User model)
+            user_info = self.db.query(User).filter(User.id == self.user_id).one() 
+
+            salary_profile = SalaryAllocationProfile(
+                user_id=self.user_id,
+                reporting_period=reporting_period,
+                net_monthly_income=user_info.monthly_salary,
+                # Other defaults will kick in
+            )
+            self.db.add(salary_profile)
+
+        # 3. Update the CRITICAL FIELD and commit
+        salary_profile.fixed_commitment_total = calculated_fixed_total
+        self.db.commit()
+        
+        return calculated_fixed_total
