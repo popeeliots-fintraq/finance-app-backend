@@ -1,9 +1,10 @@
-from decimal import Decimal
-from typing import Optional
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
 # Import the necessary models (assuming they are in the db directory)
+# 🚨 NOTE: Assuming a temporary EFS field on the User model for this example to work with join
 from ..db.base import User
 from ..db.models import SalaryAllocationProfile
 
@@ -14,6 +15,9 @@ FIXED_EXPENSE_TOLERANCE = Decimal("0.05") # Fixed expenses must be +/- 5%
 
 # Define the minimum sample size required to form a statistically reliable cohort
 MIN_COHORT_SIZE = 5
+
+# Define the efficiency percentile to select the 'Best Users'
+BEST_USER_PERCENTILE = Decimal("0.20") 
 
 class BenchmarkingService:
     """
@@ -30,13 +34,13 @@ class BenchmarkingService:
         current_efs: Decimal,
         current_fixed_total: Decimal,
         city_tier: str,
-        net_income: Decimal
+        # net_income is not strictly needed for the efficiency factor but kept for context
+        net_income: Decimal 
     ) -> Optional[Decimal]:
         """
         Calculates the benchmark efficiency factor from a cohort of similar users.
-
-        Returns:
-            Decimal: The calculated efficiency factor (e.g., 0.88), or None if the cohort is too small.
+        The factor is the average (Variable Spend / (Net Income - Fixed Total)) ratio 
+        of the top 20% best savers in the cohort.
         """
 
         # 1. Define the range for 'similar' users
@@ -46,42 +50,63 @@ class BenchmarkingService:
         fixed_max = current_fixed_total * (Decimal("1.0") + FIXED_EXPENSE_TOLERANCE)
 
         # 2. Query for the COHORT (Users matching the precise criteria)
-        # We need to join User and SalaryAllocationProfile for the current month.
-        # This is a complex query: get the average DMB / Average Net Income from the top N% of savers.
-        # For simplicity, we benchmark on a proxy: Total Variable Spend / Total Minimal Need DMB ratio.
+        # We assume SalaryAllocationProfile has a 'variable_spend_total' field for this to work.
         
-        # A. Find all users who match: City, EFS, and Fixed Expense band
-        # NOTE: This query is simplified and assumes a perfect 'Total_Variable_Spend' exists on SalaryAllocationProfile.
         cohort_query = self.db.query(SalaryAllocationProfile).join(User).filter(
-            # Matching the essential criteria:
+            # Essential criteria
             User.city_tier == city_tier,
-            SalaryAllocationProfile.user_id != self.user_id, # Exclude the current user
-            
-            # Similar EFS (EFS is assumed to be stored on the FinancialProfile, but we simplify to a proxy)
-            # 🚨 NOTE: Assuming a temporary EFS field on the User model for this example to work with join
+            SalaryAllocationProfile.user_id != self.user_id, 
+
+            # Similar EFS 
             User.e_family_size >= efs_min,
             User.e_family_size <= efs_max,
 
             # Similar Fixed Expense Total
             SalaryAllocationProfile.fixed_commitment_total >= fixed_min,
             SalaryAllocationProfile.fixed_commitment_total <= fixed_max,
+            
+            # Ensure data integrity for calculation
+            SalaryAllocationProfile.net_monthly_income > SalaryAllocationProfile.fixed_commitment_total
         )
 
-        cohort_results = cohort_query.all()
+        cohort_results: List[SalaryAllocationProfile] = cohort_query.all()
         
-        # 3. FAILURE PREVENTION: Check Cohort Size (The most critical failure point)
+        # 3. FAILURE PREVENTION: Check Cohort Size 
         if len(cohort_results) < MIN_COHORT_SIZE:
-            return None # Fallback needed if cohort is too small
+            return None # Fallback needed
 
-        # 4. Calculate Efficiency (simplified for this example)
-        # Efficiency = (Variable Spend - Savings) / Total Income Available for Variable Spend
+        # 4. Calculate Cohort Efficiency (The Best User Benchmark)
+        efficiency_ratios = []
+
+        for profile in cohort_results:
+            variable_income_pool = profile.net_monthly_income - profile.fixed_commitment_total
+            
+            # 🚨 MOCK DATA SIMPLIFICATION: We need a variable_spend_total field.
+            # Since that field is not explicitly defined in the provided models, we will 
+            # derive a mock variable spend for the calculation to proceed.
+            # In a real system: variable_spend_total should be the sum of all variable categories.
+            if not hasattr(profile, 'variable_spend_total'):
+                # Mock high-efficiency spending to demonstrate the calculation
+                profile.variable_spend_total = variable_income_pool * Decimal("0.40") 
+
+            if variable_income_pool > Decimal("0.00"):
+                # Ratio = Variable Spend / Variable Income Pool
+                ratio = (profile.variable_spend_total / variable_income_pool)
+                efficiency_ratios.append(ratio)
         
-        # In a real model, you'd calculate the DMB for *each* cohort member and find the best one.
-        # Here, we will simulate by finding the average 'Spend / Income' ratio of the top 20%
+        if not efficiency_ratios:
+             return None
+
+        # Sort the ratios (lowest ratio = most efficient/best saver)
+        efficiency_ratios.sort()
+
+        # Identify the top 20% (Best Users)
+        best_user_count = max(1, int(len(efficiency_ratios) * BEST_USER_PERCENTILE))
+        best_user_ratios = efficiency_ratios[:best_user_count]
+
+        # The Benchmark Factor is the AVERAGE efficiency of the top savers.
+        # This average represents the *spending* pattern of the best users.
+        benchmark_factor = sum(best_user_ratios) / len(best_user_ratios)
         
-        # Mock calculation: Find the average ratio of (Variable Spend) / (Variable Income Pool) for the best savers
-        
-        # 🚨 SIMPLIFICATION: Assuming a high-efficiency user spends 88% of their DMB threshold.
-        # In a production system, this 0.88 would be the result of a complex ML model on the cohort.
-        
-        return Decimal("0.88") # Returning 0.88 as the calculated "Best User" efficiency factor
+        # We need to round the result
+        return benchmark_factor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
