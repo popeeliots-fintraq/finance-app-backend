@@ -19,6 +19,7 @@ from ..ml.efs_calculator import calculate_equivalent_family_size
 
 
 class OrchestrationService:
+    """
     Core service class for Fin-Traq's Salary Autopilot (Guided Execution).
     It handles EFS/DMB calculation, manages the reclaimable salary fund,
     and generates goal/stash suggestions based on Smart Rules.
