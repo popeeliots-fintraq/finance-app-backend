@@ -11,7 +11,9 @@ from ..ml.scaling_logic import calculate_dynamic_baseline
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
-from ..db.models import SalaryAllocationProfile, SmartTransferRule
+# NOTE: Assuming Transaction and TransactionType are accessible or defined similarly
+from ..db.models import SalaryAllocationProfile, SmartTransferRule, Transaction
+from ..db.enums import TransactionType
 # NOTE: Assuming the EFS calculator is accessible here
 from ..ml.efs_calculator import calculate_equivalent_family_size
 
@@ -182,5 +184,75 @@ class OrchestrationService:
             "message": f"Autopilot suggests reallocating {total_suggested.quantize(Decimal('0.01'))} across active goals/stashes.",
         }
 
-    # NOTE: The method 'record_consent_and_update_balance' would follow here
-    # to handle the user's acceptance of the plan and trigger the actual UPI transfers.
+    # ----------------------------------------------------------------------
+    # AUTOPILOT EXECUTION METHOD (CLOSES THE LOOP)
+    # ----------------------------------------------------------------------
+    def record_consent_and_update_balance(self, transfer_plan: List[Dict[str, Any]], reporting_period: date) -> Dict[str, Any]:
+        """
+        Executes the final Autopilot action: records the user's consent,
+        logs the transfer transactions, and updates the Salary Allocation Profile.
+        """
+        if not transfer_plan:
+            return {"status": "success", "message": "No transfers to execute."}
+
+        # 1. Fetch the relevant Salary Profile
+        salary_profile = self.db.query(SalaryAllocationProfile).filter(
+            SalaryAllocationProfile.user_id == self.user_id,
+            SalaryAllocationProfile.reporting_period == reporting_period
+        ).first()
+
+        if not salary_profile:
+            # Note: This is a critical error if a plan was generated, raise HTTP in an API endpoint or a specific Exception here.
+            raise NoResultFound("Cannot execute Autopilot: Salary Allocation Profile not found for the period.")
+
+        total_transferred = Decimal("0.00")
+        executed_transfers = []
+
+        # 2. Iterate through the consented plan and execute/record
+        for item in transfer_plan:
+            transfer_amount = item.get("transfer_amount", Decimal("0.00"))
+            rule_id = item.get("rule_id")
+            
+            # Ensure the amount is a Decimal object
+            if isinstance(transfer_amount, str):
+                transfer_amount = Decimal(transfer_amount)
+            
+            if transfer_amount <= Decimal("0.00"):
+                continue
+
+            # --- A. (External System Mock) Execute UPI Transfer ---
+            # In your MVP, you are mocking the actual transfer, focusing on internal logging.
+            transfer_successful = True # Assume success for MVP
+            
+            if transfer_successful:
+                # --- B. Record the Internal Financial Transaction ---
+                # Log the transfer as an internal debit from the user's available balance
+                new_transaction = Transaction(
+                    user_id=self.user_id,
+                    transaction_date=datetime.utcnow().date(),
+                    amount=transfer_amount,
+                    description=f"Autopilot Transfer: Fund {item.get('rule_name', 'Goal')}",
+                    category=item.get('type', 'Autopilot Stash'), # e.g., 'Goal', 'Tax Saving'
+                    transaction_type=TransactionType.DEBIT_INTERNAL, # Internal debit type
+                    smart_rule_id=rule_id
+                )
+                self.db.add(new_transaction)
+                
+                total_transferred += transfer_amount
+                executed_transfers.append(item)
+
+        # 3. Update the Salary Profile (Closing the Loop)
+        # This confirms the reclaimed money has been allocated and is no longer 'available'.
+        salary_profile.projected_reclaimable_salary -= total_transferred
+        salary_profile.total_autotransferred = (salary_profile.total_autotransferred or Decimal("0.00")) + total_transferred
+        
+        # 4. Commit all changes to the database
+        self.db.commit()
+
+        # 5. Return Success Message
+        return {
+            "status": "success",
+            "message": "Autopilot execution complete. Your funds have been efficiently allocated.",
+            "total_transferred": total_transferred.quantize(Decimal("0.01")),
+            "transfers_executed": executed_transfers
+        }
