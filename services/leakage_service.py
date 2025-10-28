@@ -5,7 +5,7 @@ from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from datetime import date, datetime
 from sqlalchemy.exc import NoResultFound
-from fastapi import HTTPException, status 
+from fastapi import HTTPException, status
 
 # 🚨 CRITICAL FIX: Import the Scaling Logic for DMB calculation
 # NOTE: Assuming this path is correct for your ML engine
