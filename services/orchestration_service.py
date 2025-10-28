@@ -4,17 +4,15 @@ from sqlalchemy.orm import Session
 from datetime import date, datetime
 from sqlalchemy.exc import NoResultFound
 from fastapi import HTTPException, status
+from sqlalchemy import func
 
 # 🚨 CRITICAL FIX: Import the Scaling Logic for DMB calculation
-# NOTE: Assuming this path is correct for your ML engine
 from ..ml.scaling_logic import calculate_dynamic_baseline
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
-# NOTE: Assuming Transaction and TransactionType are accessible or defined similarly
 from ..db.models import SalaryAllocationProfile, SmartTransferRule, Transaction
 from ..db.enums import TransactionType
-# NOTE: Assuming the EFS calculator is accessible here
 from ..ml.efs_calculator import calculate_equivalent_family_size
 
 
@@ -48,22 +46,18 @@ class OrchestrationService:
             )
 
         # 2. Fetch or Create Financial Profile
-        profile = (
-            self.db.query(FinancialProfile)
-            .filter(FinancialProfile.user_id == self.user_id)
-            .first()
-        )
+        profile = self.db.query(FinancialProfile).filter(FinancialProfile.user_id == self.user_id).first()
         if not profile:
             profile = FinancialProfile(user_id=self.user_id)
             self.db.add(profile)
             self.db.flush()
 
-        # 3. Calculate EFS (Required for Stratified Dependent Scaling)
+        # 3. Calculate EFS
         profile_data = {
-            "num_adults": user.num_adults or 0,
-            "num_dependents_under_6": user.num_dependents_under_6 or 0,
-            "num_dependents_6_to_17": user.num_dependents_6_to_17 or 0,
-            "num_dependents_over_18": user.num_dependents_over_18 or 0,
+            'num_adults': user.num_adults or 0,
+            'num_dependents_under_6': user.num_dependents_under_6 or 0,
+            'num_dependents_6_to_17': user.num_dependents_6_to_17 or 0,
+            'num_dependents_over_18': user.num_dependents_over_18 or 0,
         }
         new_efs_value = calculate_equivalent_family_size(profile_data)
 
@@ -75,21 +69,17 @@ class OrchestrationService:
             equivalent_family_size=new_efs_value,
             city_tier=user.city_tier,
             income_slab=user.income_slab,
-            benchmark_efficiency_factor=None,
+            benchmark_efficiency_factor=None
         )
 
-        # 5. Persist all calculated results to the FinancialProfile
+        # 5. Persist all calculated results
         profile.e_family_size = new_efs_value
 
-        leakage_threshold = baseline_results.get(
-            "Total_Leakage_Threshold", Decimal("0.00")
-        )
+        leakage_threshold = baseline_results.get("Total_Leakage_Threshold", Decimal("0.00"))
         profile.essential_target = leakage_threshold
 
         if net_income > Decimal("0.00"):
-            profile.baseline_adjustment_factor = (
-                leakage_threshold / net_income
-            ).quantize(Decimal("0.0001"))
+            profile.baseline_adjustment_factor = (leakage_threshold / net_income).quantize(Decimal("0.0001"))
         else:
             profile.baseline_adjustment_factor = Decimal("0.00")
 
@@ -101,19 +91,14 @@ class OrchestrationService:
     # ----------------------------------------------------------------------
     # CORE ORCHESTRATION LOGIC (GUIDED EXECUTION)
     # ----------------------------------------------------------------------
-    def _fetch_available_reclaimable_salary(
-        self, reporting_period: date
-    ) -> SalaryAllocationProfile:
+
+    def _fetch_available_reclaimable_salary(self, reporting_period: date) -> SalaryAllocationProfile:
         """Fetches the latest calculated salary profile for the period."""
 
-        salary_profile = (
-            self.db.query(SalaryAllocationProfile)
-            .filter(
-                SalaryAllocationProfile.user_id == self.user_id,
-                SalaryAllocationProfile.reporting_period == reporting_period,
-            )
-            .first()
-        )
+        salary_profile = self.db.query(SalaryAllocationProfile).filter(
+            SalaryAllocationProfile.user_id == self.user_id,
+            SalaryAllocationProfile.reporting_period == reporting_period
+        ).first()
 
         if not salary_profile:
             return SalaryAllocationProfile(
@@ -122,70 +107,94 @@ class OrchestrationService:
 
         return salary_profile
 
-    def generate_consent_suggestion_plan(
-        self, reporting_period: date
-    ) -> Dict[str, Any]:
+
+    def generate_consent_suggestion_plan(self, reporting_period: date) -> Dict[str, Any]:
         """
-        Calculates how the reclaimable fund SHOULD be allocated across active Smart Rules
-        (Goals/Stashes) to achieve frictionless financial flow.
+        Calculates how the reclaimable fund SHOULD be allocated across active Smart Rules,
+        prioritizing Tax Saving rules up to the user's remaining tax headroom.
         """
         salary_profile = self._fetch_available_reclaimable_salary(reporting_period)
+        user = self.db.query(User).filter(User.id == self.user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User ID {self.user_id} not found.")
 
         available_fund = salary_profile.projected_reclaimable_salary
         remaining_fund = available_fund
         suggestion_plan: List[Dict[str, Any]] = []
         total_suggested = Decimal("0.00")
-
+        
         if available_fund <= Decimal("500.00"):
             return {
                 "available_fund": available_fund.quantize(Decimal("0.01")),
                 "total_suggested": Decimal("0.00"),
                 "suggestion_plan": [],
-                "message": "Reclaimable salary below action threshold. Autopilot on standby.",
+                "message": "Reclaimable salary below action threshold. Autopilot on standby."
             }
 
-        # 1. Fetch all active Smart Rules
-        active_rules = (
-            self.db.query(SmartTransferRule)
-            .filter(
-                SmartTransferRule.user_id == self.user_id,
-                SmartTransferRule.is_active == True,
-            )
-            .order_by(SmartTransferRule.priority.desc())
-            .all()
-        )
-
-        # 2. Allocate funds
-        for rule in active_rules:
+        # 1. Fetch all active Smart Rules, separated by type
+        active_rules = self.db.query(SmartTransferRule).filter(
+            SmartTransferRule.user_id == self.user_id,
+            SmartTransferRule.is_active == True
+        ).order_by(SmartTransferRule.priority.desc()).all()
+        
+        tax_rules = [r for r in active_rules if r.rule_type == 'Tax Saving']
+        other_rules = [r for r in active_rules if r.rule_type != 'Tax Saving']
+        
+        # Get the user's current remaining tax headroom
+        remaining_tax_headroom = user.tax_headroom_remaining or Decimal("0.00")
+        
+        # 2. --- PRIORITY ALLOCATION: TAX SAVING ---
+        for rule in tax_rules:
             if remaining_fund <= Decimal("0.00"):
                 break
+                
+            # Max amount to transfer: The MIN of (Rule Target, Remaining Fund, Remaining Tax Headroom)
+            transfer_target = min(rule.target_amount_monthly, remaining_fund, remaining_tax_headroom)
+            
+            if transfer_target > Decimal("0.00"):
+                suggestion_plan.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "transfer_amount": transfer_target.quantize(Decimal("0.01")),
+                    "destination": rule.destination_account_name,
+                    "type": rule.rule_type 
+                })
+                
+                remaining_fund -= transfer_target
+                remaining_tax_headroom -= transfer_target
+                total_suggested += transfer_target
 
+        # 3. --- SECONDARY ALLOCATION: OTHER GOALS/STASHES ---
+        for rule in other_rules:
+            if remaining_fund <= Decimal("0.00"):
+                break
+                
             transfer_amount = min(rule.target_amount_monthly, remaining_fund)
-
+            
             if transfer_amount > Decimal("0.00"):
-                suggestion_plan.append(
-                    {
-                        "rule_id": rule.id,
-                        "rule_name": rule.name,
-                        "transfer_amount": transfer_amount.quantize(Decimal("0.01")),
-                        "destination": rule.destination_account_name,
-                        "type": rule.rule_type,
-                    }
-                )
-
+                suggestion_plan.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "transfer_amount": transfer_amount.quantize(Decimal("0.01")),
+                    "destination": rule.destination_account_name,
+                    "type": rule.rule_type 
+                })
+                
                 remaining_fund -= transfer_amount
                 total_suggested += transfer_amount
 
+        # 4. Finalize and return the plan
         return {
             "available_fund": available_fund.quantize(Decimal("0.01")),
             "remaining_unallocated": remaining_fund.quantize(Decimal("0.01")),
             "total_suggested": total_suggested.quantize(Decimal("0.01")),
             "suggestion_plan": suggestion_plan,
-            "message": f"Autopilot suggests reallocating {total_suggested.quantize(Decimal('0.01'))} across active goals/stashes.",
+            "message": f"Autopilot suggests reallocating {total_suggested.quantize(Decimal('0.01'))} across goals, prioritizing tax optimization."
         }
-
+        
     # ----------------------------------------------------------------------
-    # AUTOPILOT EXECUTION METHOD (CLOSES THE LOOP)
+    # AUTOPILOT EXECUTION METHOD (CLOSES THE LOOP & HANDLES CONSENT)
     # ----------------------------------------------------------------------
     def record_consent_and_update_balance(self, transfer_plan: List[Dict[str, Any]], reporting_period: date) -> Dict[str, Any]:
         """
@@ -202,7 +211,6 @@ class OrchestrationService:
         ).first()
 
         if not salary_profile:
-            # Note: This is a critical error if a plan was generated, raise HTTP in an API endpoint or a specific Exception here.
             raise NoResultFound("Cannot execute Autopilot: Salary Allocation Profile not found for the period.")
 
         total_transferred = Decimal("0.00")
@@ -213,20 +221,17 @@ class OrchestrationService:
             transfer_amount = item.get("transfer_amount", Decimal("0.00"))
             rule_id = item.get("rule_id")
             
-            # Ensure the amount is a Decimal object
             if isinstance(transfer_amount, str):
                 transfer_amount = Decimal(transfer_amount)
-            
+                
             if transfer_amount <= Decimal("0.00"):
                 continue
 
             # --- A. (External System Mock) Execute UPI Transfer ---
-            # In your MVP, you are mocking the actual transfer, focusing on internal logging.
             transfer_successful = True # Assume success for MVP
             
             if transfer_successful:
                 # --- B. Record the Internal Financial Transaction ---
-                # Log the transfer as an internal debit from the user's available balance
                 new_transaction = Transaction(
                     user_id=self.user_id,
                     transaction_date=datetime.utcnow().date(),
@@ -242,7 +247,6 @@ class OrchestrationService:
                 executed_transfers.append(item)
 
         # 3. Update the Salary Profile (Closing the Loop)
-        # This confirms the reclaimed money has been allocated and is no longer 'available'.
         salary_profile.projected_reclaimable_salary -= total_transferred
         salary_profile.total_autotransferred = (salary_profile.total_autotransferred or Decimal("0.00")) + total_transferred
         
