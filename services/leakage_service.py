@@ -10,24 +10,24 @@ from sqlalchemy import func, and_
 # CRITICAL FIX: Update imports to reflect the file structure
 from ..ml.scaling_logic import calculate_dynamic_baseline
 # 🚨 NEW IMPORT: Benchmarking Service (Assuming it exists)
-from .benchmarking_service import BenchmarkingService 
+from .benchmarking_service import BenchmarkingService
 
 # Import models
 # NOTE: Assuming these imports are correct based on your previous messages
 from ..db.base import User, FinancialProfile
 from ..db.models import SalaryAllocationProfile, Transaction
-from ..db.enums import TransactionType 
+from ..db.enums import TransactionType
 
 # --- SERVICE CONSTANTS ---
 # NOTE: Assuming this constant is defined elsewhere or imported, using a sensible default for the service
-LOOKBACK_MONTHS = 4 
+LOOKBACK_MONTHS = 4
 # Assuming FIXED_COMMITMENT_CATEGORIES is either imported or defined here (pulling the definition from fixed_commitment_service)
 FIXED_COMMITMENT_CATEGORIES = [
     "Rent/Mortgage EMI",
     "Loan Repayment",
     "Insurance Premium",
     "Subscriptions & Dues (Annualized)",
-    "Utilities (Fixed Component)" 
+    "Utilities (Fixed Component)"
 ]
 # 🚨 DEFINITION: Absolute floor for essential spending to prevent below-par living
 GLOBAL_MINIMAL_BASELINE_FLOOR = Decimal("15000.00") # Placeholder for the absolute GMB
