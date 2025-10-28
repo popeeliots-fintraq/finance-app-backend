@@ -5,7 +5,7 @@ from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from datetime import date, datetime
 from sqlalchemy.exc import NoResultFound
-from fastapi import HTTPException, status 
+from fastapi import HTTPException, status
 
 # 🚨 CRITICAL FIX: Import the Scaling Logic for DMB calculation
 # NOTE: Assuming this path is correct for your ML engine
@@ -13,7 +13,7 @@ from ..ml.scaling_logic import calculate_dynamic_baseline
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
-from ..db.models import SalaryAllocationProfile, SmartTransferRule 
+from ..db.models import SalaryAllocationProfile, SmartTransferRule
 # NOTE: Assuming the EFS calculator is accessible here
 from ..ml.efs_calculator import calculate_equivalent_family_size
 
@@ -34,7 +34,7 @@ class OrchestrationService:
     # ----------------------------------------------------------------------
     def calculate_and_save_financial_profile(self) -> FinancialProfile:
         """
-        Calculates the EFS, then uses the EFS and income to calculate the Dynamic 
+        Calculates the EFS, then uses the EFS and income to calculate the Dynamic
         Minimal Baseline (DMB) and Leakage Thresholds for Stratified Dependent Scaling.
         This runs as a part of the daily or monthly batch job.
         """
