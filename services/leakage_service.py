@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, and_
 
 # CRITICAL FIX: Update imports to reflect the file structure
-from ..ml.scaling_logic import calculate_dynamic_baseline 
+from ..ml.scaling_logic import calculate_dynamic_baseline
 # 🚨 NEW IMPORT: Benchmarking Service (Assuming it exists)
 from .benchmarking_service import BenchmarkingService 
 
