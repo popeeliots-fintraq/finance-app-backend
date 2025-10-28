@@ -26,7 +26,7 @@ class OrchestrationService:
     """
 
     def __init__(self, db: Session, user_id: int):
-        self.db = db
+        self.db = db
         self.user_id = user_id
         
     # ----------------------------------------------------------------------
