@@ -30,9 +30,7 @@ class User(Base):
     num_dependents_over_18: Mapped[int] = mapped_column(Integer, default=0) 
 
     # 🚨 V2 CRITICAL INPUTS: REQUIRED FOR DMB/BENCHMARKING LOGIC
-    # city_tier is used by DMB for cost multiplier
     city_tier: Mapped[str] = mapped_column(String(50), nullable=True, default="Tier 3") 
-    # income_slab is used by DMB for efficiency factor and benchmarking
     income_slab: Mapped[str] = mapped_column(String(50), nullable=True, default="Medium")
 
     # Relationships
@@ -48,7 +46,6 @@ class FinancialProfile(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, index=True)
 
     # 🚨 V2 OUTPUT 1: Calculated Equivalent Family Size (EFS) - Moved from User
-    # Required by DMB logic and BenchmarkingService for similarity filtering
     e_family_size: Mapped[Decimal] = mapped_column(DECIMAL(4, 2), default=Decimal("1.00"), index=True) 
     
     # V2 OUTPUT 2: Dynamic Baseline Adjustment Factor 
@@ -77,15 +74,16 @@ class SalaryAllocationProfile(Base):
     net_monthly_income: Mapped[Decimal] = mapped_column(DECIMAL(10, 2))
     
     # 🚨 CRITICAL FIELD 1: Fixed Commitments
-    # Required for GMB Guardrail (LeakageService) and Benchmarking Cohort Filtering
     fixed_commitment_total: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00")) 
     
     # 🚨 CRITICAL FIELD 2: Actual Variable Spend
-    # Required for true Benchmarking ratio calculation and Month-End Reconciliation
     variable_spend_total: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00")) 
     
     # OUTPUT: Projected Reclaimable Salary (The final goal amount after GMB guardrail)
     projected_reclaimable_salary: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=True, default=Decimal("0.00"))
+    
+    # 🚨 NEW FIELD: Tax Leakage Headroom (Required for Salary Maximizer)
+    tax_headroom_remaining: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
     
     # Constraints (Optional but good practice)
     __table_args__ = (UniqueConstraint('user_id', 'reporting_period', name='_user_period_uc'),)
