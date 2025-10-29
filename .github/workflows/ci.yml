@@ -101,7 +101,6 @@ jobs:
           
           # Save the image URL for the deployment step
           echo "IMAGE_URL=$FULL_IMAGE_NAME" >> $GITHUB_ENV 
-
       # 4. Deploy to Google Cloud Run
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
