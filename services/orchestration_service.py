@@ -8,23 +8,16 @@ from sqlalchemy.exc import NoResultFound
 from fastapi import HTTPException, status
 from sqlalchemy import func
 
-# 🚨 CRITICAL FIX: Import the Scaling Logic for DMB calculation
-from ..ml.scaling_logic import calculate_dynamic_baseline
-
-# New Import for Leakage Service (Required for real-time orchestration)
-from .leakage_service import LeakageService 
-
-# New Import for Benchmarking Service (Required for DMB calculation)
-from .benchmarking_service import BenchmarkingService
-
-# NEW IMPORT for Proactive Insights (Fix for Gap #2: Behavioral ML)
+# --- V2 Service Imports ---
+from .leakage_service import LeakageService  
 from .insight_service import InsightService
+# 🚨 NEW CRITICAL IMPORT: Use the integrated service for ML steps
+from .financial_profile_service import FinancialProfileService
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
 from ..db.models import SalaryAllocationProfile, SmartTransferRule, Transaction
-from ..db.enums import TransactionType, RuleType # Assuming RuleType is an enum in db.enums
-from ..ml.efs_calculator import calculate_equivalent_family_size
+from ..db.enums import TransactionType, RuleType 
 
 
 class OrchestrationService:
@@ -37,80 +30,24 @@ class OrchestrationService:
     def __init__(self, db: Session, user_id: int):
         self.db = db
         self.user_id = user_id
+        # Initialize the Financial Profile Service for ML tasks
+        self.financial_profile_service = FinancialProfileService(db, user_id) 
 
     # ----------------------------------------------------------------------
     # V2 ML LOGIC INTEGRATION (EFS + Dynamic Baseline Calculation)
     # ----------------------------------------------------------------------
     def calculate_and_save_financial_profile(self) -> FinancialProfile:
         """
-        Calculates the EFS, then uses the EFS and income to calculate the Dynamic
-        Minimal Baseline (DMB) and Leakage Thresholds for Stratified Dependent Scaling.
+        Delegates the EFS/BEF/DMB calculation to the FinancialProfileService.
         This runs as a part of the daily or monthly batch job.
+        
+        FORTIFICATION: This ensures the DMB logic (SDS/EFS/BEF) is executed
+        in the correct sequence and is persisted before the LeakageService runs.
         """
-
-        # 1. Fetch User Data
-        user = self.db.query(User).filter(User.id == self.user_id).first()
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User ID {self.user_id} not found."
-            )
-
-        # 2. Fetch or Create Financial Profile
-        profile = self.db.query(FinancialProfile).filter(FinancialProfile.user_id == self.user_id).first()
-        if not profile:
-            profile = FinancialProfile(user_id=self.user_id)
-            self.db.add(profile)
-            self.db.flush()
-
-        # 3. Calculate EFS
-        profile_data = {
-            'num_adults': user.num_adults or 0,
-            'num_dependents_under_6': user.num_dependents_under_6 or 0,
-            'num_dependents_6_to_17': user.num_dependents_6_to_17 or 0,
-            'num_dependents_over_18': user.num_dependents_over_18 or 0,
-        }
-        new_efs_value = calculate_equivalent_family_size(profile_data)
-
-        # 4. Calculate Dynamic Baselines (Leakage Thresholds)
-        net_income = user.monthly_salary or Decimal("0.00")
-        fixed_total = Decimal("0.00") # NOTE: A real implementation would fetch the user's current fixed total from SalaryAllocationProfile
-
-        # --- BENCHMARKING CALL (INTEGRATION OF ML FALLBACK) ---
-        benchmarking_service = BenchmarkingService(self.db, self.user_id)
-        benchmark_factor = benchmarking_service.calculate_benchmark_factor(
-            current_efs=new_efs_value,
-            current_fixed_total=fixed_total,
-            city_tier=user.city_tier,
-            net_income=net_income
-        ) 
-        # -----------------------------------------------------
-
-        baseline_results = calculate_dynamic_baseline(
-            net_income=net_income,
-            equivalent_family_size=new_efs_value,
-            city_tier=user.city_tier,
-            income_slab=user.income_slab,
-            benchmark_efficiency_factor=benchmark_factor # <--- PASSING THE NEW BEF
-        )
-
-        # 5. Persist all calculated results
-        profile.e_family_size = new_efs_value
-        profile.benchmark_efficiency_factor = benchmark_factor # <--- SAVING THE BEF
-
-        leakage_threshold = baseline_results.get("Total_Leakage_Threshold", Decimal("0.00"))
-        profile.essential_target = leakage_threshold
-
-        if net_income > Decimal("0.00"):
-            profile.baseline_adjustment_factor = (leakage_threshold / net_income).quantize(Decimal("0.0001"))
-        else:
-            profile.baseline_adjustment_factor = Decimal("0.00")
-
-        profile.last_calculated_at = datetime.utcnow()
-
-        self.db.commit()
-        return profile
-    
+        
+        # NOTE: The FinancialProfileService handles all persistence (EFS, BEF, DMB)
+        return self.financial_profile_service.calculate_and_save_dmb()
+        
     # ----------------------------------------------------------------------
     # REAL-TIME POST-TRANSACTION ORCHESTRATION (Autopilot Trigger)
     # ----------------------------------------------------------------------
@@ -119,47 +56,36 @@ class OrchestrationService:
         """
         Triggers the LeakageService to calculate the current MTD leak,
         and then generates proactive insights based on the new spending status.
-        (Fix for Gap #2: Behavioral ML Integration)
         """
         leakage_service = LeakageService(self.db, self.user_id)
         
-        # This call handles the leakage calculation and persistence
+        # 1. Calculate Leakage and persist reclaimable fund
         leakage_data = leakage_service.calculate_leakage(reporting_period) 
         
         projected_reclaimable = leakage_data.get('projected_reclaimable_salary', Decimal("0.00"))
-        
-        # 🚨 CRITICAL FIX: DISABLED AUTONOMOUS TRANSFER 
-        # The Autopilot remains "Guided" (Phase 2), requiring user consent.
-        # self.convert_leak_to_goal_if_possible(projected_reclaimable, reporting_period) 
-        # The money remains in the account but is tracked as 'reclaimable' in the DB.
-
-        # --- NEW STEP: GENERATE PROACTIVE INSIGHTS (BEHAVIORAL ML) ---
-        insight_service = InsightService(self.db, self.user_id)
-        
-        # 🚨 FIX: Pass the detailed 'leakage_buckets' data to the Insight Service 
-        # This is the correct field from the finalized LeakageService output
         leakage_buckets = leakage_data.get('leakage_buckets')
+        
+        # 2. --- GENERATE PROACTIVE INSIGHTS (BEHAVIORAL ML) ---
+        insight_service = InsightService(self.db, self.user_id)
         
         proactive_insights = insight_service.generate_proactive_leak_insights(
             reporting_period,
-            category_leaks=leakage_buckets
+            category_leaks=leakage_buckets # Pass the detailed bucket data
         )
-        # -----------------------------------------------------------
-
+        
         return {
             "projected_reclaimable": projected_reclaimable,
-            "insights": proactive_insights, # Return the insights for the app to display
-            "leakage_buckets": leakage_buckets # FIX: Return the Leakage Buckets for the client to update the view
+            "insights": proactive_insights,
+            "leakage_buckets": leakage_buckets 
         }
 
+    # NOTE: convert_leak_to_goal_if_possible is retained but disabled for Phase 2.
     def convert_leak_to_goal_if_possible(self, projected_reclaimable: Decimal, reporting_period: date):
         """
         ***NOTE: THIS METHOD IS NOW DEPRECATED/DISABLED FOR PHASE 2 (GUIDED EXECUTION).***
         It is retained for Phase 3 (Full Autonomous Maximizer).
         """
-        # Kept for compatibility, but its call is removed from recalculate_current_period_leakage
         return 
-
 
     # ----------------------------------------------------------------------
     # CORE ORCHESTRATION LOGIC (GUIDED EXECUTION)
@@ -174,10 +100,11 @@ class OrchestrationService:
         ).first()
 
         if not salary_profile:
-            # Return a default profile if none exists for the period
-            return SalaryAllocationProfile(
-                projected_reclaimable_salary=Decimal("0.00")
-            )
+             # Return a profile with default zero values if none exists for the period
+             return SalaryAllocationProfile(
+                 projected_reclaimable_salary=Decimal("0.00"),
+                 total_autotransferred=Decimal("0.00")
+             )
 
         return salary_profile
 
@@ -204,7 +131,7 @@ class OrchestrationService:
                 "available_fund": available_fund.quantize(Decimal("0.01")),
                 "total_suggested": Decimal("0.00"),
                 "suggestion_plan": [],
-                "remaining_unallocated": available_fund.quantize(Decimal("0.01")), # Ensure this is also correct
+                "remaining_unallocated": available_fund.quantize(Decimal("0.01")),
                 "message": "Reclaimable salary below action threshold. Autopilot on standby."
             }
 
@@ -214,11 +141,11 @@ class OrchestrationService:
             SmartTransferRule.is_active == True
         ).order_by(SmartTransferRule.priority.desc()).all()
         
-        # Assuming RuleType is an enum with values 'Tax Saving' and others
+        # Separate rules based on RuleType enum
         tax_rules = [r for r in active_rules if r.rule_type == RuleType.TAX_SAVING.value]
         other_rules = [r for r in active_rules if r.rule_type != RuleType.TAX_SAVING.value]
         
-        # Get the user's current remaining tax headroom (from the profile, calculated by LeakageService)
+        # Get the user's current remaining tax headroom
         remaining_tax_headroom = salary_profile.tax_headroom_remaining or Decimal("0.00")
         
         # 2. --- PRIORITY ALLOCATION: TAX SAVING ---
@@ -226,7 +153,6 @@ class OrchestrationService:
             if remaining_fund <= Decimal("0.00"):
                 break
                 
-            # Max amount to transfer: The MIN of (Rule Target, Remaining Fund, Remaining Tax Headroom)
             # NOTE: Logic assumes target_amount_monthly is the target *remaining* to be funded this month
             transfer_target = min(rule.target_amount_monthly, remaining_fund, remaining_tax_headroom)
             
@@ -279,9 +205,6 @@ class OrchestrationService:
         """
         Executes the final Autopilot action: records the user's consent,
         logs the transfer transactions, and updates the Salary Allocation Profile.
-        
-        FORTIFICATION FIX: The internal transaction now also records the SalaryProfile ID 
-        it was sourced from, enabling robust auditing/rollback.
         """
         if not transfer_plan:
             return {"status": "success", "message": "No transfers to execute.", "total_transferred": Decimal("0.00"), "transfers_executed": []}
@@ -320,10 +243,10 @@ class OrchestrationService:
                     transaction_date=datetime.utcnow().date(),
                     amount=transfer_amount,
                     description=f"Autopilot Transfer: Fund {item.get('rule_name', 'Goal')}",
-                    category=item.get('type', 'Autopilot Stash'), # e.g., 'Goal', 'Tax Saving'
-                    transaction_type=TransactionType.DEBIT_INTERNAL, # Internal debit type
+                    category=item.get('type', 'Autopilot Stash'), 
+                    transaction_type=TransactionType.DEBIT_INTERNAL, 
                     smart_rule_id=rule_id,
-                    # 🚨 NEW AUDIT FIELD (Gap #3 Fortification)
+                    # NEW AUDIT FIELD
                     salary_profile_id=salary_profile.id 
                 )
                 self.db.add(new_transaction)
@@ -332,9 +255,6 @@ class OrchestrationService:
                 executed_transfers.append(item)
 
         # 3. Update the Salary Profile (Closing the Loop)
-        # We increase total_autotransferred by the amount transferred.
-        # NOTE: projected_reclaimable_salary is typically updated by the LeakageService,
-        # but we track the 'autotransferred' amount against the suggestion pool.
         salary_profile.total_autotransferred = (salary_profile.total_autotransferred or Decimal("0.00")) + total_transferred
         
         # 4. Commit all changes to the database
