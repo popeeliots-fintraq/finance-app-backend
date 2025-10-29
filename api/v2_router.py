@@ -12,6 +12,9 @@ from ..dependencies import get_db, get_current_user_id
 # Import the core services
 from ..services.orchestration_service import OrchestrationService
 
+# --- V2 ADDITION: Import the Leakage Router ---
+from .leakage import router as leakage_router 
+
 # Import the Pydantic schemas you provided
 from ..schemas.orchestration_data import (
     ConsentPlanOut, ConsentMoveIn, ConsentMoveOut, 
@@ -22,6 +25,15 @@ router = APIRouter(
     prefix="/v2",
     tags=["Autopilot V2 (Salary Maximizer)"],
 )
+
+# ======================================================================
+# V2 ROUTER REGISTRATION (CRITICAL NEW STEP)
+# ======================================================================
+
+# Include the new Leakage Router. 
+# Endpoints available: /v2/leakage/calculate and /v2/leakage/insights
+router.include_router(leakage_router)
+
 
 # ----------------------------------------------------------------------
 # UTILITY: MOCK TRANSACTION HOOK (SIMULATING INGESTION COMPLETION)
@@ -57,7 +69,6 @@ def transaction_hook_trigger_orchestration(
     orch_service = OrchestrationService(db, user_id)
     
     # This call executes the 'recalculate_current_period_leakage' method
-    # which contains the Gap #2 fix (InsightService integration).
     result = orch_service.recalculate_current_period_leakage(reporting_period)
 
     return result
@@ -113,7 +124,7 @@ def execute_autopilot_consent(
 ):
     """
     This endpoint executes the final step of the Guided Orchestration. 
-    It records the consent, logs the transfers with the audit field (Gap #3 fix), 
+    It records the consent, logs the transfers with the audit field, 
     and updates the Salary Allocation Profile.
     """
     try:
@@ -130,9 +141,4 @@ def execute_autopilot_consent(
     # expected by the service method's 'transfer_plan' argument
     transfer_plan_dicts = [item.model_dump() for item in consent_data.transfer_plan]
 
-    result = orch_service.record_consent_and_update_balance(
-        transfer_plan=transfer_plan_dicts, 
-        reporting_period=reporting_period
-    )
-    
-    return result
+    result
