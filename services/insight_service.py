@@ -1,126 +1,123 @@
-# services/insight_service.py
+# services/insight_service.py (FINAL INTEGRATED VERSION)
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List
+from datetime import date, datetime
 from sqlalchemy.orm import Session
-from datetime import date, datetime, timedelta
 from sqlalchemy import func
 
-from ..db.base import User, FinancialProfile
-from ..db.models import SalaryAllocationProfile, Transaction
-from ..db.enums import TransactionType
-
-# Insight thresholds (can be fine-tuned based on behavioral ML testing)
-WARNING_THRESHOLD_PERCENT = Decimal("0.85") # 85% of DMB used
-CRITICAL_THRESHOLD_PERCENT = Decimal("0.95") # 95% of DMB used
+# Assuming you have a User model, though primary data is passed via arguments
+from ..db.base import User 
 
 class InsightService:
     """
-    Generates proactive behavioral insights based on DMB tracking.
-    This helps STOP leaks (proactive) rather than just RECLAIMING them (reactive).
+    Service class responsible for generating actionable, proactive insights 
+    (Leak Cards) based on real-time leakage calculation data.
     """
 
     def __init__(self, db: Session, user_id: int):
         self.db = db
         self.user_id = user_id
+        # Define categories that trigger high-priority behavioral nudges
+        # These are usually the Pure Discretionary (lowest SDS weight) categories
+        self.HIGH_PRIORITY_CATEGORIES = ["Pure_Discretionary_DiningOut", "Pure_Discretionary_Subscription"] 
+        self.DMB_BREACH_THRESHOLD = Decimal("0.30") # 30% above DMB triggers a strong warning
 
-    def _get_current_spending_status(self, reporting_period: date) -> Dict[str, Decimal]:
-        """
-        Fetches the DMB (Essential Target) and the user's total variable spend MTD.
-        """
-        # 1. Get the DMB (Leakage Threshold) from the FinancialProfile
-        profile = self.db.query(FinancialProfile).filter(
-            FinancialProfile.user_id == self.user_id
-        ).first()
-
-        # 2. Get current period spending status
-        salary_profile = self.db.query(SalaryAllocationProfile).filter(
-            SalaryAllocationProfile.user_id == self.user_id,
-            SalaryAllocationProfile.reporting_period == reporting_period
-        ).first()
-        
-        # Fallback if profile or DMB is missing (should not happen in production)
-        if not profile or not profile.essential_target:
-            return {"essential_target": Decimal("0.00"), "variable_spend_mtd": Decimal("0.00")}
-
-        # Calculate MTD spend on DMB-eligible categories (variable spend)
-        # Note: In a full system, a LeakageService function would filter non-essential variable spending
-        
-        # MOCK IMPLEMENTATION: Use total_variable_spend if available, or calculate it.
-        # This will be replaced by accurate LeakageService aggregation.
-        if salary_profile and salary_profile.total_variable_spend:
-             variable_spend_mtd = salary_profile.total_variable_spend
-        else:
-            variable_spend_mtd = self.db.query(func.sum(Transaction.amount)).filter(
-                Transaction.user_id == self.user_id,
-                Transaction.transaction_date >= reporting_period,
-                Transaction.transaction_date < reporting_period + timedelta(days=30),
-                Transaction.transaction_type == TransactionType.DEBIT,
-                # Exclude fixed/saving categories
-                Transaction.category.notin_(['Fixed Expense', 'Goal Transfer', 'Tax Saving']) 
-            ).scalar() or Decimal("0.00")
-
-
+    def create_insight_card(self, priority: str, title: str, body: str, call_to_action: str, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Helper to structure the insight card consistently."""
         return {
-            "essential_target": profile.essential_target,
-            "variable_spend_mtd": variable_spend_mtd
+            "priority": priority,
+            "title": title,
+            "body": body,
+            "call_to_action": call_to_action,
+            "context_data": context_data,
+            "generated_at": datetime.utcnow().isoformat()
         }
 
-
-    def generate_proactive_leak_insights(self, reporting_period: date) -> List[Dict[str, Any]]:
+    def generate_proactive_leak_insights(self, reporting_period: date, category_leaks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Compares MTD variable spend against the DMB and generates actionable insight cards.
-        """
-        status_data = self._get_current_spending_status(reporting_period)
-        
-        essential_target = status_data["essential_target"]
-        variable_spend_mtd = status_data["variable_spend_mtd"]
-        
-        if essential_target <= Decimal("0.00"):
-            return [] # Cannot benchmark without a DMB
+        Analyzes the detailed leakage buckets and generates specific, actionable insight cards.
 
-        # Calculate the percentage of the DMB target used
-        usage_ratio = variable_spend_mtd / essential_target if essential_target > Decimal("0.00") else Decimal("0.00")
-        
-        insights = []
-
-        # 1. Proactive Insight: CRITICAL THRESHOLD
-        if usage_ratio >= CRITICAL_THRESHOLD_PERCENT:
-            amount_over = variable_spend_mtd - essential_target
-            insights.append({
-                "type": "CRITICAL_LEAK_WARNING",
-                "title": "🚨 Imminent Leak Alert",
-                "body": f"Your **variable spending** is {amount_over.quantize(Decimal('0.01'))} above your maximum healthy baseline. A leak is confirmed. **Tap to check impact.**",
-                "action": "VIEW_LEAK_IMPACT", # Actionable hook for the app
-                "priority": 1
-            })
-
-        # 2. Proactive Insight: WARNING THRESHOLD
-        elif usage_ratio >= WARNING_THRESHOLD_PERCENT:
-            amount_remaining = essential_target - variable_spend_mtd
-            insights.append({
-                "type": "BEHAVIORAL_NUDGE",
-                "title": "⚠️ Behavioral Nudge: Check spending",
-                "body": f"You've used **{int(usage_ratio * 100)}%** of your monthly variable pool. You only have {amount_remaining.quantize(Decimal('0.01'))} remaining before impacting your goals.",
-                "action": "VIEW_REMAINING_POOL",
-                "priority": 2
-            })
+        Args:
+            reporting_period: The current month being analyzed.
+            category_leaks: The 'leakage_buckets' list (Leakage Bucket View) from the LeakageService.
             
-        # 3. Proactive Insight: RECLAIMED FUNDS SUMMARY (This is the "Leak Fixed" message)
-        # Note: This is an important reactive insight derived from the OrchestrationService
-        salary_profile = self.db.query(SalaryAllocationProfile).filter(
-            SalaryAllocationProfile.user_id == self.user_id,
-            SalaryAllocationProfile.reporting_period == reporting_period
-        ).first()
+        Returns:
+            A list of generated insight cards (dictionaries), sorted by priority.
+        """
+        insights = []
         
-        if salary_profile and salary_profile.projected_reclaimable_salary > Decimal("500.00"):
-             insights.append({
-                "type": "RECLAIMED_FUNDS_SUMMARY",
-                "title": "💰 Salary Autopilot Success",
-                "body": f"We've recovered **{salary_profile.projected_reclaimable_salary.quantize(Decimal('0.01'))}** this month by fixing recurring leak patterns. **Tap to allocate/save this amount.**",
-                "action": "VIEW_SUGGESTION_PLAN",
-                "priority": 0 # Highest priority, as it leads to an action/goal
-            })
+        # 1. Calculate the overall projected reclaimable salary
+        # This includes the annual tax headroom leak if available
+        reclaimable_salary = Decimal("0.00")
+        for bucket in category_leaks:
+             reclaimable_salary += bucket.get('leak_amount', Decimal("0.00"))
 
 
-        return sorted(insights, key=lambda x: x['priority'])
+        # 2. Iterate through each leakage bucket to generate category-specific insights
+        for bucket in category_leaks:
+            category = bucket.get('category')
+            leak_amount = bucket.get('leak_amount', Decimal("0.00")).quantize(Decimal("0.01"))
+            baseline = bucket.get('baseline_threshold', Decimal("0.00"))
+            sds_class = bucket.get('sds_weight_class')
+            spend = bucket.get('spend', Decimal("0.00"))
+
+            if leak_amount <= Decimal("100.00"): # Ignore trivial leaks
+                continue
+
+            # --- INSIGHT TYPE A: HIGH-IMPACT DISCRETIONARY LEAK (Highest priority nudge) ---
+            if category in self.HIGH_PRIORITY_CATEGORIES:
+                insights.append(self.create_insight_card(
+                    priority="HIGH",
+                    title=f"🚨 **{category.replace('Pure_Discretionary_', '')} Leak Alert**",
+                    body=f"You've already spent **₹{spend.quantize(Decimal('0.01'))}** in this discretionary area, resulting in a **₹{leak_amount}** leak. This entire amount is immediately available for your goals!",
+                    call_to_action="REDIRECT TO GOAL",
+                    context_data={"source_category": category, "leak_value": leak_amount}
+                ))
+
+            # --- INSIGHT TYPE B: VARIABLE ESSENTIAL (VE) DMB BREACH WARNING ---
+            elif sds_class in ["Variable_Essential"] and baseline > Decimal("0.00"):
+                percentage_over_baseline = leak_amount / baseline 
+                
+                if percentage_over_baseline >= self.DMB_BREACH_THRESHOLD:
+                    insights.append(self.create_insight_card(
+                        priority="MEDIUM",
+                        title=f"⚠️ **{category} DMB Breach!**",
+                        body=f"Your essential variable spend exceeded the EFS-Scaled target by **{int(percentage_over_baseline * 100)}%**. This is a potential pattern leak.",
+                        call_to_action="VIEW ANALYTICS",
+                        context_data={"source_category": category, "baseline_breach": percentage_over_baseline}
+                    ))
+
+            # --- INSIGHT TYPE C: TAX OPTIMIZATION OPPORTUNITY (Salary Maximizer) ---
+            elif category == "Tax Optimization Headroom (Annual)":
+                insights.append(self.create_insight_card(
+                    priority="CRITICAL",
+                    title="💰 **Tax Saving Headroom Available**",
+                    body=f"You have **₹{leak_amount}** of tax-saving capacity remaining this fiscal year. This is the #1 priority for your reclaimed salary!",
+                    call_to_action="VIEW TAX PLAN",
+                    context_data={"source_category": category, "tax_headroom": leak_amount}
+                ))
+
+        # 3. Add the overall conversion/goal suggestion (highest visibility card)
+        if reclaimable_salary >= Decimal("1000.00"):
+             insights.append(self.create_insight_card(
+                priority="TOP_ACTION", # Custom high priority to ensure it's first
+                title="✨ **Salary Autopilot Fund Ready**",
+                body=f"Your total projected reclaimable salary this month is **₹{reclaimable_salary}**. Tap to execute the tax-optimized goal transfer plan.",
+                call_to_action="EXECUTE AUTOPILOT PLAN",
+                context_data={"total_reclaimable": reclaimable_salary}
+            ))
+        
+        # 4. Fallback if no specific issues are detected
+        if not insights:
+             insights.append(self.create_insight_card(
+                priority="LOW",
+                title="✅ **Financial Flow Achieved**",
+                body="You are currently within your Dynamic Minimal Baseline (EFS-Scaled targets). Maintain this effortless flow!",
+                call_to_action="VIEW DMB STATUS",
+                context_data={"status": "IN_FLOW"}
+            ))
+
+        # Sort the insights for presentation (e.g., Top Action first, then Critical, High, Medium, Low)
+        priority_map = {"TOP_ACTION": 0, "CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4}
+        return sorted(insights, key=lambda x: priority_map.get(x['priority'], 99))
