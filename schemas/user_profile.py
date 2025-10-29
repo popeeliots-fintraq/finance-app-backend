@@ -1,12 +1,9 @@
-# schemas/user_profile.py
-
-from pydantic import BaseModel, Field, condecimal
+from pydantic import BaseModel, Field
 from decimal import Decimal
-# 🚨 FIX: Import List and Tuple from typing module
 from typing import Optional, List, Tuple
+from datetime import datetime
 
-# Use condecimal for precision on the EFS factor
-EFSDecimal = condecimal(max_digits=4, decimal_places=2) 
+# NOTE: The EFSDecimal condecimal alias is removed for simplicity, using Decimal directly.
 
 class UserProfileBase(BaseModel):
     """Base schema for User Profile data (inputs for EFS calculation)."""
@@ -25,19 +22,27 @@ class UserProfileCreate(UserProfileBase):
 
 class UserProfileOut(UserProfileBase):
     """
-    Schema for returning the complete user profile data. 
-    Includes the final calculated EFS factor and the structure used for SDS.
+    Schema for returning the complete user financial profile data (Fin-Traq V2). 
+    Includes EFS, BEF, and the Dynamic Minimal Baseline (DMB) derived from them.
     """
     
-    user_id: str = Field(..., description="The unique identifier of the user.")
+    user_id: int = Field(..., description="The unique identifier of the user.") # Changed to int for typical DB ID
     
-    # The calculated output field, used for dynamic baseline adjustment
-    equivalent_family_size: EFSDecimal = Field(Decimal("1.00"), ge=Decimal("1.00"), description="The calculated Equivalent Family Size (EFS) factor.")
+    # --- V2 ML Outputs (Calculated & Persisted by OrchestrationService) ---
+    equivalent_family_size: Decimal = Field(Decimal("1.00"), ge=Decimal("1.00"), max_digits=5, decimal_places=2, description="The calculated Equivalent Family Size (EFS) factor for Stratified Dependent Scaling.")
     
-    # The structured input that was derived/calculated for the Stratified Dependent Scaling function.
+    benchmark_efficiency_factor: Decimal = Field(Decimal("1.00"), max_digits=5, decimal_places=4, description="The calculated Benchmarking Efficiency Factor (BEF) used to adjust the DMB based on peer comparison.")
+    
+    essential_target: Decimal = Field(Decimal("0.00"), ge=Decimal("0.00"), max_digits=12, decimal_places=2, description="The total calculated Dynamic Minimal Baseline (DMB) for variable essential spends (the Leakage Threshold).")
+    
+    baseline_adjustment_factor: Decimal = Field(Decimal("0.00"), max_digits=5, decimal_places=4, description="Ratio of DMB to Net Income, showing the relative tightness of the baseline.")
+
+    last_calculated_at: Optional[datetime] = Field(None, description="Timestamp of the last EFS/DMB calculation.")
+
+    # --- Structural Data (Optional for direct API use) ---
     dependent_structure: List[Tuple[str, int]] = Field(
-        ..., 
-        description="Household composition structure derived from input fields for SDS calculation. E.g., [('additional_adult', 1), ('child', 2)]"
+        [], 
+        description="Household composition structure derived from input fields for SDS calculation."
     )
 
     # Configuration to enable mapping from the SQLAlchemy ORM model
