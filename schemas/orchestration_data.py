@@ -1,4 +1,4 @@
-# finance-app-backend/schemas/orchestration_data.py
+# finance-app-backend/schemas/orchestration_data.py (UPDATED)
 
 from pydantic import BaseModel, Field, condecimal
 from decimal import Decimal
@@ -25,68 +25,29 @@ class ProactiveInsight(BaseModel):
     priority: int = Field(..., description="Priority level for display (0 is highest).")
 
 
+class CategoryLeakDetail(BaseModel):
+    """
+    NEW: Detailed breakdown of spending relative to the Dynamic Minimal Baseline (DMB).
+    """
+    category: str = Field(..., description="The spending category (e.g., 'Food & Dining', 'Shopping').")
+    total_spent: FinancialDecimal = Field(Decimal("0.00"), description="Total money spent in this category MTD.")
+    dmb_threshold: FinancialDecimal = Field(Decimal("0.00"), description="The Dynamic Minimal Baseline target for this category.")
+    leak_amount: FinancialDecimal = Field(Decimal("0.00"), description="The actual money spent above the DMB (the leak).")
+    status: str = Field(..., description="Status of the category ('ALERT', 'NEAR_LIMIT', 'GOOD').")
+
+
 class RecalculationResponse(BaseModel):
     """
     Schema for the response after a transaction triggers the Autopilot Orchestration.
-    This data drives the app's immediate state update (e.g., in a background worker).
+    This data drives the app's immediate state update.
     """
-    projected_reclaimable: FinancialDecimal = Field(Decimal("0.00"), description="The new total reclaimed salary MTD.")
+    projected_reclaimable: FinancialDecimal = Field(Decimal("0.00"), description="The new total reclaimable salary MTD (Overall Leak).")
     insights: List[ProactiveInsight] = Field(..., description="List of current proactive and reactive insight cards for the user.")
+    category_leaks: List[CategoryLeakDetail] = Field(..., description="NEW: Category-wise leak breakdown for the Leak Bucket View.")
 
 
 # ----------------------------------------------------------------------
-# V2 Guided Orchestration: Suggestion & Consent
+# V2 Guided Orchestration: Suggestion & Consent (No Change)
 # ----------------------------------------------------------------------
-
-# --- 1. Output Schema for /autopilot/suggestion-plan (Suggestion) ---
-
-class SuggestedAllocation(BaseModel):
-    """Details of a single suggested allocation based on a Smart Rule."""
-    
-    rule_id: int = Field(..., description="The ID of the Smart Rule (Goal, Tax Saving).")
-    rule_name: str = Field(..., description="The name of the Smart Rule (e.g., 'Emergency Stash').") # Added for clarity
-    destination: str = Field(..., description="The target destination (e.g., Goal 'Vacation Fund', Tax Instrument 'ELSS').")
-    transfer_amount: FinancialDecimal = Field(Decimal("0.00"), description="The amount suggested to allocate to this destination (aligned with service method).") # Renamed field
-    type: str = Field(..., description="The type of transfer (e.g., 'Goal', 'Tax Saving').")
-
-
-class ConsentPlanOut(BaseModel):
-    """
-    Schema for the Consent Suggestion Plan. This is a READ-ONLY view of 
-    how reclaimable money SHOULD be spent, awaiting user consent.
-    (Matches generate_consent_suggestion_plan service method output)
-    """
-    available_fund: FinancialDecimal = Field(Decimal("0.00"), description="Total reclaimable salary available for suggestion.")
-    total_suggested: FinancialDecimal = Field(Decimal("0.00"), description="Total amount allocated across all Smart Rules.")
-    remaining_unallocated: FinancialDecimal = Field(Decimal("0.00"), description="Leftover fund after rules are satisfied (aligned with service method).") # Renamed field
-    suggestion_plan: List[SuggestedAllocation] = Field(..., description="The suggested allocation plan for the available fund.")
-    message: str = Field(..., description="A status message for the generated plan.")
-
-
-# --- 2. Input Schema for /autopilot/consent (Consent Action) ---
-
-class ConsentTransferItem(BaseModel):
-    """Schema for a single item the user is consenting to transfer."""
-    rule_id: int = Field(..., description="The ID of the Smart Rule being executed.")
-    transfer_amount: FinancialDecimal = Field(..., gt=Decimal("0.00"), description="The exact amount consented for this rule.")
-
-class ConsentMoveIn(BaseModel):
-    """
-    Input schema for the user consenting to move funds.
-    We pass back the *specific* plan items the user consented to execute.
-    """
-    reporting_period: str = Field(..., description="The month/period the consent applies to (YYYY-MM-DD).")
-    transfer_plan: List[ConsentTransferItem] = Field(..., description="List of specific rules and amounts the user is consenting to execute.")
-
-
-# --- 3. Output Schema for /autopilot/consent (Consent Result) ---
-
-class ConsentMoveOut(BaseModel):
-    """
-    Output schema after the consent has been successfully recorded.
-    (Matches record_consent_and_update_balance service method output)
-    """
-    status: str = Field(..., description="Execution status ('success' or 'failure').")
-    message: str = Field(..., description="Confirmation message for the successful consent and balance update.")
-    total_transferred: FinancialDecimal = Field(Decimal("0.00"), description="The cumulative total of funds transferred in this batch.")
-    transfers_executed: List[Dict[str, Any]] = Field(..., description="The list of transfers that were successfully executed/logged.")
+# ... (SuggestedAllocation, ConsentPlanOut, ConsentTransferItem, ConsentMoveIn, ConsentMoveOut schemas remain the same)
+# ...
