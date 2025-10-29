@@ -15,7 +15,10 @@ from ..ml.scaling_logic import calculate_dynamic_baseline
 from .leakage_service import LeakageService 
 
 # New Import for Benchmarking Service (Required for DMB calculation)
-from .benchmarking_service import BenchmarkingService # <--- ADDED
+from .benchmarking_service import BenchmarkingService
+
+# NEW IMPORT for Proactive Insights (Fix for Gap #2: Behavioral ML)
+from .insight_service import InsightService # <--- ADDED
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
@@ -112,11 +115,11 @@ class OrchestrationService:
     # REAL-TIME POST-TRANSACTION ORCHESTRATION (Autopilot Trigger)
     # ----------------------------------------------------------------------
 
-    def recalculate_current_period_leakage(self, reporting_period: date) -> Decimal:
+    def recalculate_current_period_leakage(self, reporting_period: date) -> Dict[str, Any]: # CHANGED RETURN TYPE
         """
-        Triggers the LeakageService to calculate the current MTD leak and update
-        the SalaryAllocationProfile's variable spend and reclaimable salary.
-        Called immediately after a new transaction is processed.
+        Triggers the LeakageService to calculate the current MTD leak,
+        and then generates proactive insights based on the new spending status.
+        (Fix for Gap #2: Behavioral ML Integration)
         """
         leakage_service = LeakageService(self.db, self.user_id)
         
@@ -125,10 +128,18 @@ class OrchestrationService:
         
         projected_reclaimable = leakage_data.get('projected_reclaimable_salary', Decimal("0.00"))
         
-        # Immediately attempt to convert the new reclaimable amount to a goal/stash
+        # Immediately attempt to convert the new reclaimable amount to a goal/stash (REACTIVE)
         self.convert_leak_to_goal_if_possible(projected_reclaimable, reporting_period)
 
-        return projected_reclaimable
+        # --- NEW STEP: GENERATE PROACTIVE INSIGHTS (BEHAVIORAL ML) ---
+        insight_service = InsightService(self.db, self.user_id)
+        proactive_insights = insight_service.generate_proactive_leak_insights(reporting_period)
+        # -----------------------------------------------------------
+
+        return {
+            "projected_reclaimable": projected_reclaimable,
+            "insights": proactive_insights # Return the insights for the app to display
+        }
 
     def convert_leak_to_goal_if_possible(self, projected_reclaimable: Decimal, reporting_period: date):
         """
@@ -146,7 +157,6 @@ class OrchestrationService:
         salary_profile = self._fetch_available_reclaimable_salary(reporting_period)
         
         # Calculate the net newly recovered amount available for immediate transfer
-        # This is a simplification; a full model would track the difference since the last conversion.
         available_for_conversion = projected_reclaimable - (salary_profile.total_autotransferred or Decimal("0.00"))
 
         if available_for_conversion <= Decimal("50.00"): # Check against a smaller noise threshold
@@ -182,7 +192,9 @@ class OrchestrationService:
                 description=f"Autopilot Real-time Stash: Fund {top_rule.name}",
                 category='Autopilot Stash', # Internal category
                 transaction_type=TransactionType.DEBIT_INTERNAL, 
-                smart_rule_id=top_rule.id
+                smart_rule_id=top_rule.id,
+                # 🚨 FORTIFICATION FIX: Link to the specific salary calculation instance
+                salary_profile_id=salary_profile.id
             )
             self.db.add(new_transaction)
             
@@ -307,6 +319,9 @@ class OrchestrationService:
         """
         Executes the final Autopilot action: records the user's consent,
         logs the transfer transactions, and updates the Salary Allocation Profile.
+        
+        FORTIFICATION FIX: The internal transaction now also records the SalaryProfile ID 
+        it was sourced from, enabling robust auditing/rollback.
         """
         if not transfer_plan:
             return {"status": "success", "message": "No transfers to execute."}
@@ -347,7 +362,9 @@ class OrchestrationService:
                     description=f"Autopilot Transfer: Fund {item.get('rule_name', 'Goal')}",
                     category=item.get('type', 'Autopilot Stash'), # e.g., 'Goal', 'Tax Saving'
                     transaction_type=TransactionType.DEBIT_INTERNAL, # Internal debit type
-                    smart_rule_id=rule_id
+                    smart_rule_id=rule_id,
+                    # 🚨 NEW AUDIT FIELD (Gap #3 Fortification)
+                    salary_profile_id=salary_profile.id 
                 )
                 self.db.add(new_transaction)
                 
