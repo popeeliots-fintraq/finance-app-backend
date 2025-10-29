@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
-from datetime import date, timedelta, datetime # Added datetime for Insight Card
+from datetime import date, timedelta, datetime 
 from sqlalchemy import func, and_
 
 # CRITICAL FIX: Update imports to reflect the file structure
@@ -13,9 +13,9 @@ from ..ml.scaling_logic import calculate_dynamic_baseline
 from .benchmarking_service import BenchmarkingService
 
 # Import models
-# NOTE: Assuming these imports are correct based on your previous messages
 from ..db.base import User, FinancialProfile
-from ..db.models import SalaryAllocationProfile, Transaction, SmartTransferRule # <-- Added SmartTransferRule
+# Assumed path/name for models
+from ..db.models import SalaryAllocationProfile, Transaction, SmartTransferRule, TaxCommitment # <-- Added TaxCommitment (future proofing)
 from ..db.enums import TransactionType
 
 # --- SERVICE CONSTANTS ---
@@ -29,6 +29,10 @@ FIXED_COMMITMENT_CATEGORIES = [
 ]
 GLOBAL_MINIMAL_BASELINE_FLOOR = Decimal("15000.00") # Placeholder for the absolute GMB
 
+# --- V2 TAX LEAK CONSTANTS ---
+ANNUAL_MAX_TAX_SAVING_LIMIT = Decimal("150000.00") 
+REPORTING_YEAR_START_MONTH = 4 # Example: April 1st for a financial year
+
 class LeakageService:
     """
     Core service class for calculating financial leakage based on the
@@ -40,13 +44,13 @@ class LeakageService:
         self.user_id = user_id
 
     # ----------------------------------------------------------------------
-    # CORE V2 DMB CALCULATION HELPERS
+    # CORE V2 DMB CALCULATION HELPERS (omitted for brevity, assume unchanged)
     # ----------------------------------------------------------------------
     
     def _calculate_user_historical_spend(self, reporting_period: date) -> Dict[str, Decimal]:
         """
         Retrieves and aggregates the median monthly spend for discretionary categories
-        from the historical transactions.
+        from the historical transactions. (omitted for brevity)
         """
         start_date = reporting_period - timedelta(days=30 * LOOKBACK_MONTHS)
 
@@ -94,6 +98,7 @@ class LeakageService:
     ) -> Tuple[Dict[str, Decimal], Dict[str, Decimal]]:
         """
         Applies the MAX(EFS-Threshold, User Median Spend) logic to finalize the DMB.
+        (omitted for brevity)
         """
         
         historical_median_spends = self._calculate_user_historical_spend(reporting_period)
@@ -113,12 +118,64 @@ class LeakageService:
 
 
     # ----------------------------------------------------------------------
-    # ORCHESTRATION & PERSISTENCE
+    # V2 TAX LEAK IDENTIFICATION (New Method for Salary Maximizer)
+    # ----------------------------------------------------------------------
+
+    def _calculate_tax_headroom_leak(self, current_period_profile: SalaryAllocationProfile) -> Decimal:
+        """
+        Calculates the remaining tax-saving capacity (Tax Leak) for the financial year.
+        This is treated as a high-priority 'leak' to stop.
+        """
+        current_date = date.today()
+        
+        # 1. Calculate the start of the current financial year
+        if current_date.month >= REPORTING_YEAR_START_MONTH:
+            fiscal_year_start = date(current_date.year, REPORTING_YEAR_START_MONTH, 1)
+        else:
+            fiscal_year_start = date(current_date.year - 1, REPORTING_YEAR_START_MONTH, 1)
+
+        # 2. Sum tax-related commitments/investments made this fiscal year.
+        # This is the actual amount the user has *committed* to saving for tax this year.
+        # Future-Proofing: Use TaxCommitment model or categorized transactions.
+        
+        # SIMPLIFIED MVP PROXY: Use the Fixed Commitments (as a proxy for tax/investment portion)
+        # and assume it has been paid for (current_date.month - REPORTING_YEAR_START_MONTH + 1) months.
+        
+        current_month_index = (current_date.month - REPORTING_YEAR_START_MONTH) % 12
+        months_passed = current_month_index + 1
+        
+        # A rough estimate of YTD tax committed (needs refinement with actual TaxCommitment model)
+        ytd_committed_tax_spend = self.db.query(func.sum(TaxCommitment.amount)).filter(
+            TaxCommitment.user_id == self.user_id,
+            and_(
+                TaxCommitment.commitment_date >= fiscal_year_start,
+                TaxCommitment.commitment_date < current_date
+            )
+        ).scalar() or Decimal("0.00")
+        
+        # If no explicit TaxCommitments, fall back to a fixed * 12 projection
+        if ytd_committed_tax_spend == Decimal("0.00"):
+             ytd_committed_tax_spend = current_period_profile.fixed_commitment_total * Decimal(months_passed)
+        
+        # 3. Calculate Tax Leak (Headroom)
+        tax_headroom = ANNUAL_MAX_TAX_SAVING_LIMIT - ytd_committed_tax_spend
+
+        # The tax leak cannot be negative (it is capped at 0 if the limit is exceeded)
+        tax_leak = max(Decimal("0.00"), tax_headroom)
+        
+        # 4. Persist the Tax Leak amount to the profile (NOTE: NOT COMMITTED HERE)
+        current_period_profile.tax_headroom_remaining = tax_leak.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        
+        return tax_leak
+
+    # ----------------------------------------------------------------------
+    # ORCHESTRATION & PERSISTENCE (Updated)
     # ----------------------------------------------------------------------
     
     def _fetch_profile_data_and_baselines(self, reporting_period: date) -> Dict[str, Any]:
         """
         Fetches required user financial data and calculates EFS-Scaled DMB/Thresholds.
+        (omitted for brevity)
         """
         
         salary_profile = self.db.query(SalaryAllocationProfile).filter(
@@ -171,6 +228,7 @@ class LeakageService:
     def _get_current_month_spends(self, reporting_period: date) -> Dict[str, Decimal]:
         """
         Retrieves the month-to-date (MTD) variable spend, categorized.
+        (omitted for brevity)
         """
         start_date = reporting_period
         
@@ -197,14 +255,22 @@ class LeakageService:
 
     def calculate_leakage(self, reporting_period: date) -> Dict[str, Any]:
         """
-        Calculates leakage amount and persists the reclaimable salary fund.
+        Calculates leakage amount, includes Tax Leak, and persists the reclaimable salary fund.
         """
 
         try:
             profile_data = self._fetch_profile_data_and_baselines(reporting_period)
         except NoResultFound as e:
             raise Exception(f"Failed to initialize Leakage Service: {e}")
+        except Exception as e:
+            raise Exception(f"Failed to initialize Leakage Service: {e}")
 
+        salary_profile = profile_data["salary_profile"]
+
+        # 1. Calculate Tax Leak (Priority 1 Leak)
+        tax_leak_amount = self._calculate_tax_headroom_leak(salary_profile)
+
+        # 2. Calculate Variable Spending Leakage
         efs_thresholds = profile_data["dynamic_baselines"]
         final_dmb, _ = self.calculate_final_dmb_with_history(
             reporting_period, efs_thresholds
@@ -212,8 +278,8 @@ class LeakageService:
 
         current_spends = self._get_current_month_spends(reporting_period)
 
+        variable_leakage = Decimal("0.00")
         leakage_buckets: List[Dict[str, Any]] = []
-        total_leakage = Decimal("0.00")
 
         # --- 3. Calculate Leakage for SCALED Categories (VE & SD) ---
         for category, dmb_threshold in final_dmb.items():
@@ -226,13 +292,13 @@ class LeakageService:
 
             if spend > Decimal("0.00"):
                 if leak_amount > Decimal("0.00"):
-                    total_leakage += leak_amount
+                    variable_leakage += leak_amount
                     leak_source_description = "Above Dynamic Minimal Baseline"
                 else:
                     leak_source_description = "Within Baseline (Achieving Flow)"
 
                 leakage_buckets.append({
-                    "category": category, # Keeping original category key for ML insight mapping
+                    "category": category, 
                     "baseline_threshold": dmb_threshold.quantize(Decimal("0.01")),
                     "spend": spend.quantize(Decimal("0.01")),
                     "leak_source": leak_source_description,
@@ -248,10 +314,10 @@ class LeakageService:
 
             if spend > Decimal("0.00"):
                 leak_amount = spend
-                total_leakage += leak_amount
+                variable_leakage += leak_amount
 
                 leakage_buckets.append({
-                    "category": category, # Keeping original category key for ML insight mapping
+                    "category": category, 
                     "baseline_threshold": Decimal("0.00").quantize(Decimal("0.01")),
                     "spend": spend.quantize(Decimal("0.01")),
                     "leak_source": "100% Discretionary Spend (Goal Opportunity)",
@@ -259,7 +325,10 @@ class LeakageService:
                     "leak_percentage_of_spend": "100.00%"
                 })
 
-        # 5. Apply GMB Guardrail to Total Leakage
+        # --- 5. Final Total Leakage (Variable Leak + Tax Leak) ---
+        total_leakage = variable_leakage + tax_leak_amount
+
+        # 6. Apply GMB Guardrail to Total Leakage
         net_income = profile_data["salary_profile"].net_monthly_income
         fixed_commitments = profile_data["salary_profile"].fixed_commitment_total
         
@@ -267,26 +336,39 @@ class LeakageService:
         max_possible_leakage = max(Decimal("0.00"), net_income - absolute_floor)
         projected_reclaimable_salary = min(total_leakage, max_possible_leakage)
 
-        # 🚨 CRITICAL STEP: PERSIST THE LEAKAGE RESULT TO THE DB
-        salary_profile = profile_data["salary_profile"]
+        # 7. Add Tax Leak to Buckets for Display (Only if it's a positive leak/headroom)
+        if tax_leak_amount > Decimal("0.00"):
+            leakage_buckets.append({
+                "category": "Tax Optimization Headroom (Annual)", 
+                "baseline_threshold": ANNUAL_MAX_TAX_SAVING_LIMIT, 
+                "spend": ANNUAL_MAX_TAX_SAVING_LIMIT - tax_leak_amount, 
+                "leak_source": "Unused Tax Capacity (Salary Maximizer)",
+                "leak_amount": tax_leak_amount.quantize(Decimal("0.01")), 
+                "leak_percentage_of_spend": f"{tax_leak_amount / ANNUAL_MAX_TAX_SAVING_LIMIT * 100:.2f}%"
+            })
+
+
+        # 8. CRITICAL STEP: PERSIST THE LEAKAGE RESULT TO THE DB
         salary_profile.projected_reclaimable_salary = projected_reclaimable_salary
         salary_profile.variable_spend_total = sum(current_spends.values()) 
+        # Note: tax_headroom_remaining was set in _calculate_tax_headroom_leak()
         self.db.commit()
 
-        # 6. Return the calculated data for immediate display
+        # 9. Return the calculated data
         return {
             "total_leakage_amount": total_leakage.quantize(Decimal("0.01")),
             "projected_reclaimable_salary": projected_reclaimable_salary.quantize(Decimal("0.01")),
+            "tax_headroom_remaining": salary_profile.tax_headroom_remaining, # New Field!
             "leakage_buckets": leakage_buckets
         }
 
     # ----------------------------------------------------------------------
-    # BEHAVIORAL ML INSIGHT CARDS (NEWLY ADDED)
+    # BEHAVIORAL ML INSIGHT CARDS (Updated to include Tax Leak insight)
     # ----------------------------------------------------------------------
 
     def get_leakage_insights(self, reporting_period: date) -> List[Dict[str, Any]]:
         """
-        Calculates leakage and transforms major leaks into actionable insight cards, 
+        Calculates leakage and transforms major leaks/headroom into actionable insight cards, 
         linking them to the user's highest priority goal/stash.
         """
         
@@ -294,8 +376,8 @@ class LeakageService:
         try:
             leakage_data = self.calculate_leakage(reporting_period)
             leakage_buckets = leakage_data['leakage_buckets']
+            tax_leak_amount = leakage_data['tax_headroom_remaining'] # Use the calculated field
         except Exception as e:
-            # Handle case where core leakage calculation fails
             print(f"Error during leakage calculation for insights: {e}")
             return [] 
 
@@ -305,42 +387,60 @@ class LeakageService:
             SmartTransferRule.is_active == True
         ).order_by(SmartTransferRule.priority.desc()).first()
 
-        if not top_rule or top_rule.target_amount_monthly <= Decimal("0.00"):
-            # Cannot generate meaningful "opportunity" insights without an active goal
-            return [] 
-
         insight_cards = []
         
-        # 3. Generate a card for every major leak (leak amount above a threshold)
-        for bucket in leakage_buckets:
-            # Note: Category name is now in original format for easy display mapping
-            category_key = bucket.get('category', 'Spending') 
-            display_category = category_key.replace('_', ' ').title()
-            leak_amount = bucket.get('leak_amount', Decimal("0.00"))
+        # --- A. Tax Leak Insight (Highest Priority) ---
+        if tax_leak_amount > Decimal("5000.00"): # Larger threshold for annual tax leak
+            annual_leak_percent = (tax_leak_amount / ANNUAL_MAX_TAX_SAVING_LIMIT) * 100
             
-            # Ensure leak_amount is Decimal and above a noise threshold (e.g., ₹500)
-            if isinstance(leak_amount, str):
-                leak_amount = Decimal(leak_amount)
+            insight_cards.append({
+                "headline": f"🚨 Tax Leak Alert: {annual_leak_percent:.0f}% Unused Capacity",
+                "diagnostic": (
+                    f"You have **₹{tax_leak_amount:,.2f}** remaining in tax-saving headroom for the year. "
+                    f"This is a guaranteed leak from your maximum salary."
+                ),
+                "opportunity": (
+                    f"Autopilot can allocate this monthly to maximize your tax refund, ensuring you keep the maximum salary."
+                ),
+                "action_text": "Set Tax Saving Rule",
+                "linked_rule_id": None # No specific rule, directs to general Tax Rule creation
+            })
+            
+        # --- B. Variable/Behavioral Leak Insights (Based on Goals) ---
+        if top_rule and top_rule.target_amount_monthly > Decimal("0.00"):
+            for bucket in leakage_buckets:
                 
-            if leak_amount > Decimal("500.00"): 
+                # Skip the Tax Leak bucket for this goal-based comparison
+                if bucket['category'] == "Tax Optimization Headroom (Annual)":
+                    continue
+                    
+                category_key = bucket.get('category', 'Spending') 
+                display_category = category_key.replace('_', ' ').title()
+                leak_amount = bucket.get('leak_amount', Decimal("0.00"))
                 
-                # Calculate the impact metric
-                percent_of_goal = (leak_amount / top_rule.target_amount_monthly) * 100
-                
-                # --- Build the Insight Card ---
-                card = {
-                    "headline": f"💸 Behavioral Leak Alert: ₹{leak_amount:,.2f}",
-                    "diagnostic": (
-                        f"You spent **₹{leak_amount:,.2f}** above your baseline in **{display_category}** this month. "
-                        f"This is a recurring leak pattern."
-                    ),
-                    "opportunity": (
-                        f"This single leak could cover **{percent_of_goal:.0f}%** of your monthly **{top_rule.name}** goal, "
-                        f"or fully fund it if you maintain control for the next 2 days."
-                    ),
-                    "action_text": "View Leak Details & Set Limit",
-                    "linked_rule_id": top_rule.id 
-                }
-                insight_cards.append(card)
+                if isinstance(leak_amount, str):
+                    try:
+                        leak_amount = Decimal(leak_amount.replace(',', ''))
+                    except:
+                        continue
+                        
+                if leak_amount > Decimal("500.00"): # Noise threshold for monthly spend
+                    
+                    percent_of_goal = (leak_amount / top_rule.target_amount_monthly) * 100
+                    
+                    card = {
+                        "headline": f"💸 Behavioral Leak Alert: ₹{leak_amount:,.2f}",
+                        "diagnostic": (
+                            f"You spent **₹{leak_amount:,.2f}** above your baseline in **{display_category}** this month. "
+                            f"This is a recurring leak pattern."
+                        ),
+                        "opportunity": (
+                            f"This single leak could cover **{percent_of_goal:.0f}%** of your monthly **{top_rule.name}** goal, "
+                            f"a high-value conversion opportunity."
+                        ),
+                        "action_text": "View Leak Details & Set Limit",
+                        "linked_rule_id": top_rule.id 
+                    }
+                    insight_cards.append(card)
 
         return insight_cards
