@@ -10,6 +10,65 @@ from .base import Base
 
 
 # --- NEW MODEL: RAW TRANSACTION (Fix for Gap #1: Data Integrity) ---
+
+class FinancialProfile(Base):
+    """
+    Stores long-term financial factors and ML outputs for Stratified Dependent Scaling.
+    Calculated by the FinancialProfileService.
+    """
+    __tablename__ = 'financial_profile'
+
+    # Primary Key is the user_id (one-to-one relationship with User)
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    
+    # --- V2 ML LOGIC FIELDS (EFS & DMB Parameters) ---
+    
+    # 1. Equivalent Family Size (EFS) - Max 5 digits total, 2 decimal places (e.g., 2.35)
+    e_family_size = Column(DECIMAL(5, 2), nullable=False, default=Decimal("1.00"), comment="The calculated Equivalent Family Size (EFS) factor.")
+    
+    # 2. Benchmark Efficiency Factor (BEF) - Max 5 digits total, 4 decimal places (e.g., 0.9850)
+    benchmark_efficiency_factor = Column(DECIMAL(5, 4), nullable=False, default=Decimal("1.0000"), comment="Efficiency factor derived from benchmarking peers.")
+    
+    # 3. Dynamic Minimal Baseline (DMB) - Max 12 digits total, 2 decimal places (The Leakage Threshold)
+    essential_target = Column(DECIMAL(12, 2), nullable=False, default=Decimal("0.00"), comment="The total calculated Dynamic Minimal Baseline (DMB) for variable essential spends.")
+    
+    # 4. Baseline Adjustment Factor (DMB / Net Income) - Max 5 digits total, 4 decimal places
+    baseline_adjustment_factor = Column(DECIMAL(5, 4), nullable=False, default=Decimal("0.0000"), comment="The ratio of DMB to Net Income.")
+
+    # Metadata
+    last_calculated_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship back to the User model
+    user = relationship("User", back_populates="financial_profile")
+
+
+# --- Necessary Update to the User Model (Assuming it exists) ---
+class User(Base):
+    """(Partial definition showing necessary relationships)"""
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    # ... other user fields ...
+    
+    # --- V2 User Profile Inputs (Required for EFS calculation logic if not using a separate profile table) ---
+    # NOTE: These were in your Pydantic model for input, and should be on the User model
+    num_adults = Column(Integer, default=1)
+    num_dependents_under_6 = Column(Integer, default=0)
+    num_dependents_6_to_17 = Column(Integer, default=0)
+    num_dependents_over_18 = Column(Integer, default=0)
+    monthly_salary = Column(DECIMAL(12, 2), default=Decimal("0.00")) # Used for DMB scaling
+    city_tier = Column(String, default="Tier 1")
+    income_slab = Column(String, default="Mid")
+
+    # --- Relationships ---
+    transactions = relationship("Transaction", back_populates="user")
+    smart_rules = relationship("SmartTransferRule", back_populates="user")
+    raw_transactions = relationship("RawTransaction", back_populates="user")
+    # CRITICAL: Link to the FinancialProfile for EFS/DMB data
+    financial_profile = relationship("FinancialProfile", uselist=False, back_populates="user")
+    
+# ... (All other models follow: Transaction, SmartTransferRule, SalaryAllocationProfile) ...
+
 class RawTransaction(Base):
     """
     Stores raw, unprocessed SMS/UPI messages. This ensures no data is lost
