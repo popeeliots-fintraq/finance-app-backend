@@ -1,8 +1,6 @@
-# finance-app-backend/schemas/leakage_data.py
-
 from pydantic import BaseModel, Field, condecimal
 from decimal import Decimal
-from typing import List
+from typing import List, Literal
 
 # Use condecimal for precise financial values
 FinancialDecimal = condecimal(max_digits=12, decimal_places=2)
@@ -11,6 +9,14 @@ class LeakageBucket(BaseModel):
     """Schema for a single identified financial 'leak' bucket."""
     
     category: str = Field(..., description="The expense category where leakage was found (e.g., Groceries, Utility).")
+    
+    # 🚨 CRITICAL ADDITION 1: Stratified Dependent Scaling (SDS) Weight Class
+    # Essential categories have a DMB derived from EFS. Discretionary is often zero.
+    sds_weight_class: Literal["Variable_Essential", "Fixed_Commitment", "Discretionary"] = Field(
+        ...,
+        description="The class defining how DMB is calculated (Essential scales with EFS, Discretionary is based on user history)."
+    )
+    
     baseline: FinancialDecimal = Field(Decimal("0.00"), description="The calculated Dynamic Minimal Baseline (DMB) for this category.")
     spend: FinancialDecimal = Field(Decimal("0.00"), description="The user's actual spending in this category.")
     leak_amount: FinancialDecimal = Field(Decimal("0.00"), description="The calculated leak amount (Spend - Baseline).")
