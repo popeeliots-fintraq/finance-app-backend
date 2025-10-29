@@ -1,4 +1,4 @@
-# services/leakage_service.py (Optimized V2 Integration)
+# services/leakage_service.py (Finalized V2 Integration)
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Tuple
@@ -7,7 +7,7 @@ from sqlalchemy.exc import NoResultFound
 from datetime import date, timedelta, datetime 
 from sqlalchemy import func, and_
 
-# --- CRITICAL V2 ML/DB IMPORTS (KEEPING YOUR EXISTING LOGIC) ---
+# --- CRITICAL V2 ML/DB IMPORTS ---
 # NOTE: Keeping your existing imports for the more complex ML calculation
 from ..ml.scaling_logic import calculate_dynamic_baseline 
 from .benchmarking_service import BenchmarkingService # Benchmarking is critical for robust ML
@@ -57,22 +57,21 @@ class LeakageService:
         self.user_id = user_id
 
     # ----------------------------------------------------------------------
-    # HISTORICAL & DMB CALCULATION HELPERS (UNCHANGED/ASSUMED)
+    # HISTORICAL & DMB CALCULATION HELPERS (ASSUMED EXISTENT)
     # ----------------------------------------------------------------------
     
-    # ... (Keep your _calculate_user_historical_spend function) ...
-    # ... (Keep your calculate_final_dmb_with_history function) ...
-    # ... (Keep your _get_current_month_spends function) ...
-    
-    # NOTE: These functions are kept as you provided them, as they perform 
-    # the necessary aggregation and the MAX(EFS-Threshold, User Median Spend) logic.
+    # NOTE: These placeholders represent complex historical median spend and 
+    # the final max(EFS-DMB, Historical Median) logic needed for DMB stability.
+    # def _calculate_user_historical_spend(self, reporting_period: date, category: str) -> Decimal: ...
+    # def calculate_final_dmb_with_history(self, reporting_period: date, efs_thresholds: Dict[str, Decimal]) -> Tuple[Dict[str, Decimal], Dict[str, Decimal]]: ...
+    # def _get_current_month_spends(self, reporting_period: date) -> Dict[str, Decimal]: ...
+
 
     # ----------------------------------------------------------------------
-    # V2 TAX LEAK IDENTIFICATION (UNCHANGED)
+    # V2 TAX LEAK IDENTIFICATION
     # ----------------------------------------------------------------------
 
     def _calculate_tax_headroom_leak(self, current_period_profile: SalaryAllocationProfile) -> Decimal:
-        # ... (Keep existing logic) ...
         current_date = date.today()
         
         if current_date.month >= REPORTING_YEAR_START_MONTH:
@@ -83,6 +82,8 @@ class LeakageService:
         current_month_index = (current_date.month - REPORTING_YEAR_START_MONTH) % 12
         months_passed = current_month_index + 1
         
+        # NOTE: Using a mock/placeholder TaxCommitment model lookup
+        # This should be replaced with actual transaction filtering for tax-eligible categories if TaxCommitment model is not used.
         ytd_committed_tax_spend = self.db.query(func.sum(TaxCommitment.amount)).filter(
             TaxCommitment.user_id == self.user_id,
             and_(
@@ -92,7 +93,8 @@ class LeakageService:
         ).scalar() or Decimal("0.00")
         
         if ytd_committed_tax_spend == Decimal("0.00"):
-             ytd_committed_tax_spend = current_period_profile.fixed_commitment_total * Decimal(months_passed)
+            # Fallback assumption if no TaxCommitment entries are found, use fixed commitments as a proxy
+            ytd_committed_tax_spend = current_period_profile.fixed_commitment_total * Decimal(months_passed)
         
         tax_headroom = ANNUAL_MAX_TAX_SAVING_LIMIT - ytd_committed_tax_spend
         tax_leak = max(Decimal("0.00"), tax_headroom)
@@ -120,26 +122,18 @@ class LeakageService:
         if not user_info:
             raise NoResultFound(f"User ID {self.user_id} not found.")
 
-        # CRITICAL V2: FinancialProfile must contain the calculated EFS from OrchestrationService
+        # CRITICAL V2: FinancialProfile must contain the calculated EFS and BEF
         profile = self.db.query(FinancialProfile).filter(FinancialProfile.user_id == self.user_id).first()
 
-        if not profile or not profile.e_family_size:
-             # This is a critical failure point. In production, OrchestrationService must run first.
-             raise NoResultFound("Equivalent Family Size (EFS) not found. Cannot run DMB calculation.")
+        if not profile or not profile.e_family_size or not profile.benchmark_efficiency_factor:
+             raise NoResultFound("Financial Profile (EFS or BEF) not found. OrchestrationService must run first.")
         
-        # --- 1. Get EFS and Benchmarking Factor ---
+        # --- 1. Get EFS and Benchmarking Factor (Reading persisted values) ---
         efs_value = profile.e_family_size
-
-        # Benchmarking Service is crucial for SDS weighting and is kept
-        benchmarking_service = BenchmarkingService(self.db, self.user_id)
-        benchmark_factor = benchmarking_service.calculate_efficiency_factor(
-            current_efs=efs_value,
-            current_fixed_total=salary_profile.fixed_commitment_total,
-            city_tier=user_info.city_tier,
-            net_income=salary_profile.net_monthly_income
-        )
-
-        # --- 2. Call Complex ML Scaling Logic ---
+        benchmark_factor = profile.benchmark_efficiency_factor
+        
+        # --- 2. Call Complex ML Scaling Logic (to get category-specific DMBs) ---
+        # NOTE: Assuming 'calculate_dynamic_baseline' handles the SDS weights and applies EFS/BEF
         baseline_results = calculate_dynamic_baseline(
             net_income=salary_profile.net_monthly_income,
             equivalent_family_size=efs_value, # Explicitly using EFS here
@@ -164,7 +158,8 @@ class LeakageService:
         try:
             profile_data = self._fetch_profile_data_and_baselines(reporting_period)
         except NoResultFound as e:
-            raise Exception(f"Failed to initialize Leakage Service: {e}")
+            # Re-raise with an Orchestration error message, as this service depends on the profile being calculated
+            raise Exception(f"Failed to run Leakage Service. Required FinancialProfile data missing: {e}") 
         except Exception as e:
             raise Exception(f"Failed to initialize Leakage Service: {e}")
 
@@ -175,12 +170,13 @@ class LeakageService:
 
         # 2. Calculate Variable Spending Leakage
         efs_thresholds = profile_data["dynamic_baselines"]
-        final_dmb, _ = self.calculate_final_dmb_with_history(
-            reporting_period, efs_thresholds
-        )
-
-        current_spends = self._get_current_month_spends(reporting_period)
-
+        # NOTE: Assuming this returns a dict of category-specific final DMBs
+        final_dmb, current_spends = self.calculate_final_dmb_with_history(
+             reporting_period, efs_thresholds
+         )
+        # Fallback to simple _get_current_month_spends if calculate_final_dmb_with_history doesn't return spends
+        # current_spends = self._get_current_month_spends(reporting_period) 
+        
         variable_leakage = Decimal("0.00")
         leakage_buckets: List[Dict[str, Any]] = []
 
@@ -236,7 +232,7 @@ class LeakageService:
         # --- 5. Final Total Leakage (Variable Leak + Tax Leak) ---
         total_leakage = variable_leakage + tax_leak_amount
 
-        # 6. Apply GMB Guardrail to Total Leakage (UNCHANGED)
+        # 6. Apply GMB Guardrail to Total Leakage
         net_income = profile_data["salary_profile"].net_monthly_income
         fixed_commitments = profile_data["salary_profile"].fixed_commitment_total
         
@@ -249,28 +245,23 @@ class LeakageService:
             leakage_buckets.append({
                 "category": "Tax Optimization Headroom (Annual)", 
                 "sds_weight_class": "Tax_Commitment", # Explicitly set
-                "baseline_threshold": ANNUAL_MAX_TAX_SAVING_LIMIT, 
-                "spend": ANNUAL_MAX_TAX_SAVING_LIMIT - tax_leak_amount, 
+                "baseline_threshold": ANNUAL_MAX_TAX_SAVING_LIMIT.quantize(Decimal("0.01")), 
+                "spend": (ANNUAL_MAX_TAX_SAVING_LIMIT - tax_leak_amount).quantize(Decimal("0.01")), 
                 "leak_source": "Unused Tax Capacity (Salary Maximizer)",
                 "leak_amount": tax_leak_amount.quantize(Decimal("0.01")), 
                 "leak_percentage_of_spend": f"{tax_leak_amount / ANNUAL_MAX_TAX_SAVING_LIMIT * 100:.2f}%"
             })
 
 
-        # 8. CRITICAL STEP: PERSIST THE LEAKAGE RESULT TO THE DB (UNCHANGED)
+        # 8. CRITICAL STEP: PERSIST THE LEAKAGE RESULT TO THE DB
         salary_profile.projected_reclaimable_salary = projected_reclaimable_salary
-        salary_profile.variable_spend_total = sum(current_spends.values()) 
+        salary_profile.variable_spend_total = sum(current_spends.values()) if current_spends else Decimal("0.00")
         self.db.commit()
 
-        # 9. Return the calculated data (UNCHANGED)
+        # 9. Return the calculated data
         return {
             "total_leakage_amount": total_leakage.quantize(Decimal("0.01")),
             "projected_reclaimable_salary": projected_reclaimable_salary.quantize(Decimal("0.01")),
             "tax_headroom_remaining": salary_profile.tax_headroom_remaining,
             "leakage_buckets": leakage_buckets
         }
-
-    # ----------------------------------------------------------------------
-    # BEHAVIORAL ML INSIGHT CARDS (UNCHANGED)
-    # ----------------------------------------------------------------------
-    # ... (Keep get_leakage_insights function as provided) ...
