@@ -1,4 +1,4 @@
-# services/orchestration_service.py (UPDATED)
+# services/orchestration_service.py (FINAL INTEGRATED VERSION)
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List
@@ -18,7 +18,7 @@ from .leakage_service import LeakageService
 from .benchmarking_service import BenchmarkingService
 
 # NEW IMPORT for Proactive Insights (Fix for Gap #2: Behavioral ML)
-from .insight_service import InsightService # <--- ADDED
+from .insight_service import InsightService
 
 # Import the models needed
 from ..db.base import User, FinancialProfile
@@ -115,7 +115,7 @@ class OrchestrationService:
     # REAL-TIME POST-TRANSACTION ORCHESTRATION (Autopilot Trigger)
     # ----------------------------------------------------------------------
 
-    def recalculate_current_period_leakage(self, reporting_period: date) -> Dict[str, Any]: # CHANGED RETURN TYPE
+    def recalculate_current_period_leakage(self, reporting_period: date) -> Dict[str, Any]:
         """
         Triggers the LeakageService to calculate the current MTD leak,
         and then generates proactive insights based on the new spending status.
@@ -124,7 +124,7 @@ class OrchestrationService:
         leakage_service = LeakageService(self.db, self.user_id)
         
         # This call handles the leakage calculation and persistence
-        leakage_data = leakage_service.calculate_leakage(reporting_period) # leakage_data now includes 'category_leak_details'
+        leakage_data = leakage_service.calculate_leakage(reporting_period) 
         
         projected_reclaimable = leakage_data.get('projected_reclaimable_salary', Decimal("0.00"))
         
@@ -135,17 +135,21 @@ class OrchestrationService:
 
         # --- NEW STEP: GENERATE PROACTIVE INSIGHTS (BEHAVIORAL ML) ---
         insight_service = InsightService(self.db, self.user_id)
-        # Pass the detailed category leak data to the Insight Service for better nudge generation
+        
+        # 🚨 FIX: Pass the detailed 'leakage_buckets' data to the Insight Service 
+        # This is the correct field from the finalized LeakageService output
+        leakage_buckets = leakage_data.get('leakage_buckets')
+        
         proactive_insights = insight_service.generate_proactive_leak_insights(
-             reporting_period,
-             category_leaks=leakage_data.get('category_leak_details')
+            reporting_period,
+            category_leaks=leakage_buckets
         )
         # -----------------------------------------------------------
 
         return {
             "projected_reclaimable": projected_reclaimable,
             "insights": proactive_insights, # Return the insights for the app to display
-            "category_leaks": leakage_data.get('category_leak_details') # NEW: Return leak detail for leak view
+            "leakage_buckets": leakage_buckets # FIX: Return the Leakage Buckets for the client to update the view
         }
 
     def convert_leak_to_goal_if_possible(self, projected_reclaimable: Decimal, reporting_period: date):
@@ -214,8 +218,8 @@ class OrchestrationService:
         tax_rules = [r for r in active_rules if r.rule_type == RuleType.TAX_SAVING.value]
         other_rules = [r for r in active_rules if r.rule_type != RuleType.TAX_SAVING.value]
         
-        # Get the user's current remaining tax headroom
-        remaining_tax_headroom = user.tax_headroom_remaining or Decimal("0.00")
+        # Get the user's current remaining tax headroom (from the profile, calculated by LeakageService)
+        remaining_tax_headroom = salary_profile.tax_headroom_remaining or Decimal("0.00")
         
         # 2. --- PRIORITY ALLOCATION: TAX SAVING ---
         for rule in tax_rules:
