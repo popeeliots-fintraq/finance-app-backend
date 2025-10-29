@@ -1,145 +1,138 @@
-# finance-app-backend/api/v2_router.py
+# v2_router.py (or api/v2_router.py)
 
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from decimal import Decimal
-from typing import Dict, Any
-from datetime import datetime
+from datetime import date
+from typing import List, Dict, Any
 
-# Import Dependencies and Services
-from ..dependencies import get_db, get_verified_user_id 
-from ..services.leakage_service import LeakageService 
+# Assuming standard FastAPI dependencies and utility functions
+# Replace with your actual path structure for dependencies
+from ..dependencies import get_db, get_current_user_id 
+
+# Import the core services
 from ..services.orchestration_service import OrchestrationService
 
-# 🚨 V2 ADDITION: Import Schemas for Leakage/Consent
-from ..schemas.leakage_data import LeakageOut 
+# Import the Pydantic schemas you provided
 from ..schemas.orchestration_data import (
-    ConsentPlanOut,          # Output schema for the suggestion plan
-    ConsentMoveIn,           # Input schema for the consent move request
-    ConsentMoveOut           # Output schema after the consent is recorded
+    ConsentPlanOut, ConsentMoveIn, ConsentMoveOut, 
+    RecalculationResponse, SuggestedAllocation
 )
-
 
 router = APIRouter(
     prefix="/v2",
-    tags=["Fin-Traq V2 Leak Finder & Autopilot"],
-    # 🚨 SECURITY: All V2 endpoints require X-API-Key and a valid Firebase token
-    dependencies=[Depends(get_verified_user_id)] 
+    tags=["Autopilot V2 (Salary Maximizer)"],
 )
 
 # ----------------------------------------------------------------------
-# 1. LEAK FINDER (PHASE 1) - READ-ONLY 
+# UTILITY: MOCK TRANSACTION HOOK (SIMULATING INGESTION COMPLETION)
+# ----------------------------------------------------------------------
+
+@router.post(
+    "/autopilot/transaction-hook", 
+    response_model=RecalculationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Simulate new categorized transaction; triggers Orchestration and Proactive Insights."
+)
+def transaction_hook_trigger_orchestration(
+    # In a real system, the body would contain the new Transaction ID and its date
+    reporting_period_str: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id) 
+):
+    """
+    Called by the internal categorization worker after a raw SMS/UPI message 
+    has been successfully converted into a clean Transaction record. 
+    
+    This runs the core Autopilot loop: recalculating leakage, attempting immediate 
+    real-time conversion, and generating proactive/reactive insights (Leak Cards).
+    """
+    try:
+        reporting_period = date.fromisoformat(reporting_period_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid date format. Must be YYYY-MM-DD."
+        )
+
+    orch_service = OrchestrationService(db, user_id)
+    
+    # This call executes the 'recalculate_current_period_leakage' method
+    # which contains the Gap #2 fix (InsightService integration).
+    result = orch_service.recalculate_current_period_leakage(reporting_period)
+
+    return result
+
+
+# ----------------------------------------------------------------------
+# GUIDED EXECUTION: SUGGESTION ENDPOINT
 # ----------------------------------------------------------------------
 
 @router.get(
-    "/leakage-buckets", 
-    response_model=LeakageOut,
-    status_code=status.HTTP_200_OK,
-    summary="Get the Leakage Bucket View using Stratified Dependent Scaling (SDS)."
+    "/autopilot/suggestion-plan", 
+    response_model=ConsentPlanOut,
+    summary="Generates the tax-optimized allocation plan from the recovered salary pool."
 )
-def get_leakage_bucket_view(
-    user_id: str = Depends(get_verified_user_id), 
-    db: Session = Depends(get_db)
+def get_suggestion_plan(
+    reporting_period_str: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
 ):
     """
-    Calculates the financial leakage amount, replacing the old expense dashboard view.
+    Fetches the Autopilot's recommended allocation plan for the current available 
+    reclaimable fund, prioritizing tax savings and goals.
     """
     try:
-        leakage_service = LeakageService(db=db, user_id=user_id)
-        leakage_data = leakage_service.calculate_leakage()
-        return leakage_data
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="An error occurred during leakage calculation."
-        )
-
-# ----------------------------------------------------------------------
-# 2. AUTOPILOT SUGGESTION (PHASE 2) - READ-ONLY 
-# ----------------------------------------------------------------------
-
-@router.post(
-    "/autopilot-plan",
-    response_model=ConsentPlanOut, # 🚨 UPDATED RESPONSE MODEL
-    status_code=status.HTTP_200_OK,
-    summary="Generates the Consent Suggestion Plan for recovered money (read-only)."
-)
-def generate_consent_suggestion_plan(
-    reporting_period: str, # Expecting 'YYYY-MM-DD'
-    user_id: str = Depends(get_verified_user_id),
-    db: Session = Depends(get_db)
-):
-    """
-    Calculates how recovered money SHOULD be converted into goals based on Smart Rules.
-    This is a READ operation; it does NOT commit any balance changes.
-    """
-    try:
-        period_date = datetime.strptime(reporting_period, "%Y-%m-%d").date()
-        orchestration_service = OrchestrationService(db=db, user_id=user_id)
-        
-        # 🚨 UPDATED CALL: Use the new suggestion method
-        plan = orchestration_service.generate_consent_suggestion_plan(
-            reporting_period=period_date
-        )
-        
-        return plan
-        
-    except ValueError as e:
+        reporting_period = date.fromisoformat(reporting_period_str)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail=f"Invalid date format or data: {e}"
-        )
-    except Exception as e:
-        # Catch NoResultFound from the service if the profile is missing
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=str(e)
+            detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
+    orch_service = OrchestrationService(db, user_id)
+    plan_data = orch_service.generate_consent_suggestion_plan(reporting_period)
+
+    # Note: Pydantic will validate the dictionary returned by the service method 
+    # against the ConsentPlanOut schema automatically.
+    return plan_data
+
+
 # ----------------------------------------------------------------------
-# 3. CONSENT EXECUTION (PHASE 2) - WRITE ACTION 
+# GUIDED EXECUTION: CONSENT/EXECUTION ENDPOINT
 # ----------------------------------------------------------------------
 
 @router.post(
-    "/autopilot-consent",
-    response_model=ConsentMoveOut, # 🚨 NEW RESPONSE MODEL
-    status_code=status.HTTP_200_OK,
-    summary="Records user consent and updates the internal displayed balance (WRITE action)."
+    "/autopilot/consent", 
+    response_model=ConsentMoveOut,
+    summary="Executes the user-consented Autopilot transfers and logs the audit trail."
 )
-def record_consent_move(
-    consent_request: ConsentMoveIn, # 🚨 NEW INPUT SCHEMA
-    user_id: str = Depends(get_verified_user_id),
-    db: Session = Depends(get_db)
+def execute_autopilot_consent(
+    consent_data: ConsentMoveIn,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
 ):
     """
-    This endpoint is called when the user consents ('YES'). It performs the
-    internal 'move' by adjusting the user's tracking fields in the database.
+    This endpoint executes the final step of the Guided Orchestration. 
+    It records the consent, logs the transfers with the audit field (Gap #3 fix), 
+    and updates the Salary Allocation Profile.
     """
     try:
-        # Convert string date from schema input to datetime.date object
-        period_date = datetime.strptime(consent_request.reporting_period, "%Y-%m-%d").date()
-        
-        orchestration_service = OrchestrationService(db=db, user_id=user_id)
-        
-        # This is the function that contains the db.commit()
-        result = orchestration_service.record_consent_and_update_balance(
-            consented_amount=consent_request.consented_amount,
-            reporting_period=period_date
-        )
-        
-        return result
-        
-    except HTTPException:
-        # Re-raise explicit HTTP exceptions (e.g., 400 validation from the service)
-        raise
-    except Exception as e:
+        reporting_period = date.fromisoformat(consent_data.reporting_period)
+    except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Failed to record consent: {e}"
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid date format for reporting_period. Must be YYYY-MM-DD."
         )
+
+    orch_service = OrchestrationService(db, user_id)
+    
+    # Convert ConsentTransferItem list to a list of dictionaries 
+    # expected by the service method's 'transfer_plan' argument
+    transfer_plan_dicts = [item.model_dump() for item in consent_data.transfer_plan]
+
+    result = orch_service.record_consent_and_update_balance(
+        transfer_plan=transfer_plan_dicts, 
+        reporting_period=reporting_period
+    )
+    
+    return result
