@@ -1,4 +1,4 @@
-# v2_router.py (or api/v2_router.py)
+# v2_router.py (in the 'api' folder)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -6,14 +6,16 @@ from datetime import date
 from typing import List, Dict, Any
 
 # Assuming standard FastAPI dependencies and utility functions
-# Replace with your actual path structure for dependencies
+# Paths are correct because 'api' is a sibling to 'db', 'services', etc.
 from ..dependencies import get_db, get_current_user_id 
 
 # Import the core services
 from ..services.orchestration_service import OrchestrationService
 
 # --- V2 ADDITION: Import the Leakage Router ---
-from .leakage import router as leakage_router 
+# CRITICAL FIX: The path must be relative to this file's location ('api/').
+# Assuming 'leakage.py' is in 'api/v2/leakage.py'
+from .v2.leakage import router as leakage_router 
 
 # Import the Pydantic schemas you provided
 from ..schemas.orchestration_data import (
@@ -27,7 +29,7 @@ router = APIRouter(
 )
 
 # ======================================================================
-# V2 ROUTER REGISTRATION (CRITICAL NEW STEP)
+# V2 ROUTER REGISTRATION
 # ======================================================================
 
 # Include the new Leakage Router. 
@@ -141,4 +143,9 @@ def execute_autopilot_consent(
     # expected by the service method's 'transfer_plan' argument
     transfer_plan_dicts = [item.model_dump() for item in consent_data.transfer_plan]
 
-    result
+    result = orch_service.record_consent_and_update_balance(
+        transfer_plan=transfer_plan_dicts, 
+        reporting_period=reporting_period
+    )
+    
+    return result
