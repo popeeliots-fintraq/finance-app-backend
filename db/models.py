@@ -82,7 +82,7 @@ class SmartTransferRule(Base):
     is_active = Column(Boolean, default=True)
     
     target_amount_monthly = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"), comment="Monthly funding target for this rule.")
-    amount_allocated_mtd = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"), comment="Total amount funded towards this rule in the current month."))
+    amount_allocated_mtd = Column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"), comment="Total amount funded towards this rule in the current month.")
     destination_account_name = Column(String, nullable=True)
 
     # Relationships
