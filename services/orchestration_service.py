@@ -1,4 +1,4 @@
-# services/orchestration_service.py
+# services/orchestration_service.py (UPDATED)
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List
@@ -124,86 +124,39 @@ class OrchestrationService:
         leakage_service = LeakageService(self.db, self.user_id)
         
         # This call handles the leakage calculation and persistence
-        leakage_data = leakage_service.calculate_leakage(reporting_period)
+        leakage_data = leakage_service.calculate_leakage(reporting_period) # leakage_data now includes 'category_leak_details'
         
         projected_reclaimable = leakage_data.get('projected_reclaimable_salary', Decimal("0.00"))
         
-        # Immediately attempt to convert the new reclaimable amount to a goal/stash (REACTIVE)
-        self.convert_leak_to_goal_if_possible(projected_reclaimable, reporting_period)
+        # 🚨 CRITICAL FIX: DISABLED AUTONOMOUS TRANSFER 
+        # The Autopilot remains "Guided" (Phase 2), requiring user consent.
+        # self.convert_leak_to_goal_if_possible(projected_reclaimable, reporting_period) 
+        # The money remains in the account but is tracked as 'reclaimable' in the DB.
 
         # --- NEW STEP: GENERATE PROACTIVE INSIGHTS (BEHAVIORAL ML) ---
         insight_service = InsightService(self.db, self.user_id)
-        proactive_insights = insight_service.generate_proactive_leak_insights(reporting_period)
+        # Pass the detailed category leak data to the Insight Service for better nudge generation
+        proactive_insights = insight_service.generate_proactive_leak_insights(
+             reporting_period,
+             category_leaks=leakage_data.get('category_leak_details')
+        )
         # -----------------------------------------------------------
 
         return {
             "projected_reclaimable": projected_reclaimable,
-            "insights": proactive_insights # Return the insights for the app to display
+            "insights": proactive_insights, # Return the insights for the app to display
+            "category_leaks": leakage_data.get('category_leak_details') # NEW: Return leak detail for leak view
         }
 
     def convert_leak_to_goal_if_possible(self, projected_reclaimable: Decimal, reporting_period: date):
         """
-        Implements the 'If Leak Fixed → New Salary' engine.
-        Converts the identified reclaimable salary into an automatic transfer 
-        to the user's highest priority goal or tax commitment.
+        ***NOTE: THIS METHOD IS NOW DEPRECATED/DISABLED FOR PHASE 2 (GUIDED EXECUTION).***
+        It is retained for Phase 3 (Full Autonomous Maximizer).
         """
-        # Minimum threshold for triggering Autopilot conversion action (e.g., ₹200)
-        AUTOPILOT_THRESHOLD = Decimal("200.00") 
-        
-        if projected_reclaimable < AUTOPILOT_THRESHOLD: 
-            return # Skip if leak is too small (noise)
+        # Kept for compatibility, but its call is removed from recalculate_current_period_leakage
+        return 
 
-        # Fetch the Salary Profile to see how much has already been converted MTD
-        salary_profile = self._fetch_available_reclaimable_salary(reporting_period)
-        
-        # Calculate the net newly recovered amount available for immediate transfer
-        available_for_conversion = projected_reclaimable - (salary_profile.total_autotransferred or Decimal("0.00"))
 
-        if available_for_conversion <= Decimal("50.00"): # Check against a smaller noise threshold
-             return
-
-        # 1. Find the highest priority active goal/stash that is not fully funded MTD
-        top_rule = self.db.query(SmartTransferRule).filter(
-            SmartTransferRule.user_id == self.user_id,
-            SmartTransferRule.is_active == True,
-            # Filter for goals that aren't yet fully funded for the month (amount_allocated_mtd < target_amount_monthly)
-            SmartTransferRule.amount_allocated_mtd < SmartTransferRule.target_amount_monthly
-        ).order_by(SmartTransferRule.priority.desc()).first()
-
-        if not top_rule:
-            return # No active goals to convert the leak to
-
-        # 2. Calculate the conversion amount
-        monthly_gap = top_rule.target_amount_monthly - (top_rule.amount_allocated_mtd or Decimal("0.00"))
-        
-        # The amount to convert is the MIN of the newly recovered money AND the goal's monthly gap
-        conversion_amount = min(available_for_conversion, monthly_gap)
-
-        if conversion_amount > Decimal("0.00"):
-            # 3. Perform Allocation (Update MTD allocation on the rule)
-            top_rule.amount_allocated_mtd += conversion_amount
-            salary_profile.total_autotransferred = (salary_profile.total_autotransferred or Decimal("0.00")) + conversion_amount
-            
-            # 4. Record the Internal Financial Transaction (A critical audit log for the Autopilot action)
-            new_transaction = Transaction(
-                user_id=self.user_id,
-                transaction_date=datetime.utcnow().date(),
-                amount=conversion_amount,
-                description=f"Autopilot Real-time Stash: Fund {top_rule.name}",
-                category='Autopilot Stash', # Internal category
-                transaction_type=TransactionType.DEBIT_INTERNAL, 
-                smart_rule_id=top_rule.id,
-                # 🚨 FORTIFICATION FIX: Link to the specific salary calculation instance
-                salary_profile_id=salary_profile.id
-            )
-            self.db.add(new_transaction)
-            
-            # 5. Commit changes
-            self.db.commit()
-            
-            # NOTE: An external notification/insight card would be generated here: 
-            # "Autopilot Stashed ₹X from your recovered leak into your Y goal."
-    
     # ----------------------------------------------------------------------
     # CORE ORCHESTRATION LOGIC (GUIDED EXECUTION)
     # ----------------------------------------------------------------------
@@ -247,6 +200,7 @@ class OrchestrationService:
                 "available_fund": available_fund.quantize(Decimal("0.01")),
                 "total_suggested": Decimal("0.00"),
                 "suggestion_plan": [],
+                "remaining_unallocated": available_fund.quantize(Decimal("0.01")), # Ensure this is also correct
                 "message": "Reclaimable salary below action threshold. Autopilot on standby."
             }
 
@@ -269,6 +223,7 @@ class OrchestrationService:
                 break
                 
             # Max amount to transfer: The MIN of (Rule Target, Remaining Fund, Remaining Tax Headroom)
+            # NOTE: Logic assumes target_amount_monthly is the target *remaining* to be funded this month
             transfer_target = min(rule.target_amount_monthly, remaining_fund, remaining_tax_headroom)
             
             if transfer_target > Decimal("0.00"):
@@ -289,6 +244,7 @@ class OrchestrationService:
             if remaining_fund <= Decimal("0.00"):
                 break
                 
+            # NOTE: Logic assumes target_amount_monthly is the target *remaining* to be funded this month
             transfer_amount = min(rule.target_amount_monthly, remaining_fund)
             
             if transfer_amount > Decimal("0.00"):
@@ -324,7 +280,7 @@ class OrchestrationService:
         it was sourced from, enabling robust auditing/rollback.
         """
         if not transfer_plan:
-            return {"status": "success", "message": "No transfers to execute."}
+            return {"status": "success", "message": "No transfers to execute.", "total_transferred": Decimal("0.00"), "transfers_executed": []}
 
         # 1. Fetch the relevant Salary Profile
         salary_profile = self.db.query(SalaryAllocationProfile).filter(
@@ -354,7 +310,7 @@ class OrchestrationService:
             transfer_successful = True # Assume success for MVP
             
             if transfer_successful:
-                # --- B. Record the Internal Financial Transaction ---
+                # --- B. Record the Internal Financial Transaction (Gap #3 Fortification) ---
                 new_transaction = Transaction(
                     user_id=self.user_id,
                     transaction_date=datetime.utcnow().date(),
@@ -372,8 +328,9 @@ class OrchestrationService:
                 executed_transfers.append(item)
 
         # 3. Update the Salary Profile (Closing the Loop)
-        # Note: We decrease the reclaimable salary fund by the amount transferred.
-        salary_profile.projected_reclaimable_salary -= total_transferred
+        # We increase total_autotransferred by the amount transferred.
+        # NOTE: projected_reclaimable_salary is typically updated by the LeakageService,
+        # but we track the 'autotransferred' amount against the suggestion pool.
         salary_profile.total_autotransferred = (salary_profile.total_autotransferred or Decimal("0.00")) + total_transferred
         
         # 4. Commit all changes to the database
