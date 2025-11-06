@@ -1,12 +1,16 @@
 # v2_router.py (in the 'api' folder)
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
 from datetime import date
 from typing import List, Dict, Any
+# NOTE: Removed 'from sqlalchemy.orm import Session'
+
+# Import the Firestore Client type for correct type hinting
+from google.cloud.firestore import Client as FirestoreClient # New Import
 
 # Assuming standard FastAPI dependencies and utility functions
 # Paths are correct because 'api' is a sibling to 'db', 'services', etc.
+# NOTE: get_db must now yield the FirestoreClient object.
 from ..dependencies import get_db, get_current_user_id 
 
 # Import the core services
@@ -50,15 +54,13 @@ router.include_router(leakage_router)
 def transaction_hook_trigger_orchestration(
     # In a real system, the body would contain the new Transaction ID and its date
     reporting_period_str: str,
-    db: Session = Depends(get_db),
+    # FIX: Replaced Session with FirestoreClient
+    db_client: FirestoreClient = Depends(get_db), 
     user_id: int = Depends(get_current_user_id) 
 ):
     """
     Called by the internal categorization worker after a raw SMS/UPI message 
     has been successfully converted into a clean Transaction record. 
-    
-    This runs the core Autopilot loop: recalculating leakage, attempting immediate 
-    real-time conversion, and generating proactive/reactive insights (Leak Cards).
     """
     try:
         reporting_period = date.fromisoformat(reporting_period_str)
@@ -68,7 +70,8 @@ def transaction_hook_trigger_orchestration(
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    orch_service = OrchestrationService(db, user_id)
+    # FIX: Pass the Firestore client instead of a SQL session
+    orch_service = OrchestrationService(db_client, user_id) 
     
     # This call executes the 'recalculate_current_period_leakage' method
     result = orch_service.recalculate_current_period_leakage(reporting_period)
@@ -87,7 +90,8 @@ def transaction_hook_trigger_orchestration(
 )
 def get_suggestion_plan(
     reporting_period_str: str,
-    db: Session = Depends(get_db),
+    # FIX: Replaced Session with FirestoreClient
+    db_client: FirestoreClient = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
     """
@@ -102,11 +106,10 @@ def get_suggestion_plan(
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    orch_service = OrchestrationService(db, user_id)
+    # FIX: Pass the Firestore client instead of a SQL session
+    orch_service = OrchestrationService(db_client, user_id) 
     plan_data = orch_service.generate_consent_suggestion_plan(reporting_period)
 
-    # Note: Pydantic will validate the dictionary returned by the service method 
-    # against the ConsentPlanOut schema automatically.
     return plan_data
 
 
@@ -121,7 +124,8 @@ def get_suggestion_plan(
 )
 def execute_autopilot_consent(
     consent_data: ConsentMoveIn,
-    db: Session = Depends(get_db),
+    # FIX: Replaced Session with FirestoreClient
+    db_client: FirestoreClient = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
     """
@@ -137,7 +141,8 @@ def execute_autopilot_consent(
             detail="Invalid date format for reporting_period. Must be YYYY-MM-DD."
         )
 
-    orch_service = OrchestrationService(db, user_id)
+    # FIX: Pass the Firestore client instead of a SQL session
+    orch_service = OrchestrationService(db_client, user_id) 
     
     # Convert ConsentTransferItem list to a list of dictionaries 
     # expected by the service method's 'transfer_plan' argument
