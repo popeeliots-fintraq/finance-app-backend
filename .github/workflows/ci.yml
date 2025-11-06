@@ -48,7 +48,7 @@ jobs:
         run: |
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
-      
+          
       # Assuming 'db/base.py' is the correct path for your User Data Schema and EFS implementation logic
       - name: Run Model Initialization Check
         run: |
@@ -74,7 +74,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Authenticate to Google Cloud
+      # 1. Authenticate to Google Cloud (This is all Firestore needs for credentials!)
       - name: 'Authenticate to GCP'
         id: auth
         uses: 'google-github-actions/auth@v2'
@@ -101,6 +101,7 @@ jobs:
           
           # Save the image URL for the deployment step
           echo "IMAGE_URL=$FULL_IMAGE_NAME" >> $GITHUB_ENV 
+          
       # 4. Deploy to Google Cloud Run
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
@@ -109,23 +110,19 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE_URL }}
 
-          # ⚠️ CRITICAL: ADDING THE CLOUD SQL CONNECTOR
-          # Format: project:region:instance
-          cloud_sql_instances: ${{ env.PROJECT_ID }}:${{ env.REGION }}:fin-traq-db
+          # Removed: cloud_sql_instances: ... (No longer needed)
           
-          # CORRECTED: Use the dedicated 'env_vars' input for environment variables (for Fin-Traq V2 ML logic)
+          # Environment variables for Fin-Traq V2 ML logic (kept for EFS/SDS)
           env_vars: |
             ML_EFS_ENABLED=true
             ML_WEIGHTS_VERSION=v2.0
 
-          # ⚠️ CRITICAL: Setting the Uvicorn command
+          # Setting the Uvicorn command
           entrypoint: uvicorn
           args: |
             ["app:app", "--host", "0.0.0.0", "--port", "$PORT", "--log-level", "info"]
             
-          # CORRECTED: Use the dedicated 'secrets' input for Secret Manager references (for database connection)
-          secrets: |
-            DB_CONNECTION_URL=FIN_TRAQ_DB_URL:latest
+          # Removed: secrets: ... (No longer needed, Firestore uses ADC)
             
-          # CORRECTED: Use the 'flags' input for custom gcloud run flags (like disabling unauthenticated access)
+          # Use the 'flags' input for custom gcloud run flags
           flags: --no-allow-unauthenticated
