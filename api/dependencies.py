@@ -1,29 +1,62 @@
 # finance-app-backend/api/dependencies.py
 
 import os
-import secrets # Used for secure string comparison (timing attack resistance)
+import secrets
 from functools import lru_cache
 from fastapi import Header, HTTPException, status
-from starlette.requests import Request # Added to log the user agent if needed (optional)
+# NEW IMPORT: Need the Firestore Client library
+from google.cloud import firestore
+from google.cloud.firestore import Client as FirestoreClient
+from starlette.requests import Request
 
-# 1. Use lru_cache to read the environment variable only once at server startup
-# Using a specific name for the Fin-Traq backend API Key for clarity
+# --- GLOBAL FIREBASE/FIRESTORE CLIENT INITIALIZATION ---
+# Use a global variable to hold the client instance
+# This adheres to the singleton pattern for efficiency in Cloud Run/FastAPI
+firestore_client: FirestoreClient = None
+
+def get_firestore_client() -> FirestoreClient:
+    """Initializes the global Firestore client instance if it doesn't exist."""
+    global firestore_client
+    if firestore_client is None:
+        # Client initialization is done only once. 
+        # It automatically handles authentication (ADC) from the Cloud Run environment.
+        firestore_client = firestore.Client()
+    return firestore_client
+
+def get_db() -> FirestoreClient:
+    """
+    FastAPI Dependency that provides the Cloud Firestore Client object.
+    
+    This replaces the old get_db function that provided an SQLAlchemy Session.
+    The 'yield' pattern is used, although for a simple client object (unlike a session), 
+    'return' is often sufficient, but 'yield' can be safer for future cleanup logic.
+    """
+    try:
+        db_client = get_firestore_client()
+        yield db_client
+    except Exception as e:
+        # Raise an exception if the database client fails to initialize/connect
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database connection error: Could not initialize Firestore client. Detail: {e}"
+        )
+
+# --------------------------------------------------------------------------
+# EXISTING API KEY VALIDATION CODE (NO CHANGES NEEDED)
+# --------------------------------------------------------------------------
+
 @lru_cache()
 def get_expected_fin_traq_api_key() -> str:
     """Retrieves the FIN_TRAQ_API_KEY from the server's environment."""
-    # Renamed the environment variable for better project clarity
     return os.getenv("FIN_TRAQ_API_KEY", "")
 
 def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     """
     FastAPI Dependency to validate the API key sent in the X-API-Key header.
-    This ensures only the trusted Fin-Traq Android client or internal services 
-    can access the Locked Backend Financial Orchestration System.
     """
     expected_key = get_expected_fin_traq_api_key()
     
     # Check 1: Server Configuration Error (500)
-    # The expected key should always be set as a secret in the Cloud Run deployment.
     if not expected_key:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -31,12 +64,10 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
         )
 
     # Check 2: Key Validation (401 Unauthorized)
-    # CRITICAL: Use secrets.compare_digest for constant-time comparison to mitigate timing attacks.
     if not secrets.compare_digest(x_api_key, expected_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key provided for Fin-Traq Backend Access"
         )
         
-    # If the key is valid, the request proceeds
     return x_api_key
