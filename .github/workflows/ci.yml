@@ -1,4 +1,4 @@
-# .github/workflows/deploy.yml
+# .github/workflows/ci.yml
 name: Python Backend CI/CD (Fin-Traq V2)
 
 on:
@@ -13,12 +13,12 @@ on:
 
 env:
   # === Fin-Traq V2 Deployment Configuration (CONFIRMED VALUES) ===
-  PROJECT_ID: popeeliots-fintraq # Confirmed from your Cloud Console URL and screenshots
-  SERVICE_NAME: fintraq-backend # Confirmed from Cloud Run services
-  REGION: us-central1 # Confirmed from Cloud Run/Artifact Registry locations
+  PROJECT_ID: popeeliots-fintraq
+  SERVICE_NAME: fintraq-backend
+  REGION: us-central1
   
   # Artifact Registry Config
-  ARTIFACT_REGISTRY: fintraq-backend # Confirmed from Artifact Registry list
+  ARTIFACT_REGISTRY: fintraq-backend
   IMAGE_NAME: fintraq-backend-v2-image
   # ==========================================================
 
@@ -40,6 +40,7 @@ jobs:
       - name: Install Dependencies & Quality Tools
         run: |
           python -m pip install --upgrade pip
+          # Ensure all necessary production and testing dependencies are installed
           pip install -r requirements.txt
           pip install flake8
       
@@ -49,11 +50,14 @@ jobs:
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
           
-      # Assuming 'db/base.py' is the correct path for your User Data Schema and EFS implementation logic
-      - name: Run Model Initialization Check
+      # ⚠️ CRITICAL FIX: The old test for 'db.base' must be updated or removed, 
+      # as your SQL ORM structure is gone.
+      - name: Check for Core Schema Files (Migration Safety Check)
         run: |
-          echo "Testing import of core DB/Schema (User Data Schema, EFS implementation)..."
-          python -c "from db.base import Base; print('Core models/schema imported successfully')"
+          # 🚨 FIX: Replaced the failing SQL import check with a file system check.
+          # We should remove this step entirely once all SQL files are deleted.
+          echo "Checking for old SQL models to ensure deletion..."
+          ls db/base.py 2> /dev/null && { echo "ERROR: Old db/base.py found. Migration is incomplete."; exit 1; } || echo "db/base.py is gone or correctly removed."
           
       - name: Basic API Health Check
         run: echo "Code quality check passed. Proceeding to deployment."
@@ -70,16 +74,20 @@ jobs:
     
     runs-on: ubuntu-latest
     
+    # Required permission for workload identity federation
+    permissions:
+      contents: 'read'
+      id-token: 'write' 
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Authenticate to Google Cloud (This is all Firestore needs for credentials!)
+      # 1. Authenticate to Google Cloud
       - name: 'Authenticate to GCP'
         id: auth
         uses: 'google-github-actions/auth@v2'
         with:
-          # Uses the JSON key stored as a GitHub Secret
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       # 2. Configure Docker for Artifact Registry
@@ -89,17 +97,9 @@ jobs:
       # 3. Build and Push the Docker Image
       - name: Build and Push Docker Image
         run: |
-          # Create the fully qualified image name using the commit SHA as the tag
           FULL_IMAGE_NAME=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          
-          # Build the image using the optimized Dockerfile
-          # (Assumes the Dockerfile is in the root directory)
           docker build -t $FULL_IMAGE_NAME .
-          
-          # Push the image to Artifact Registry
           docker push $FULL_IMAGE_NAME
-          
-          # Save the image URL for the deployment step
           echo "IMAGE_URL=$FULL_IMAGE_NAME" >> $GITHUB_ENV 
           
       # 4. Deploy to Google Cloud Run
@@ -110,19 +110,20 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE_URL }}
 
-          # Removed: cloud_sql_instances: ... (No longer needed)
+          # 🗑️ CLEANUP: Removed: cloud_sql_instances: ... (Confirmed removed in original)
+          # 🗑️ CLEANUP: Removed: secrets: ... (Confirmed removed in original, Firestore uses ADC)
           
-          # Environment variables for Fin-Traq V2 ML logic (kept for EFS/SDS)
+          # Environment variables for Fin-Traq V2 ML logic (EFS/SDS) - RETAINED
           env_vars: |
             ML_EFS_ENABLED=true
             ML_WEIGHTS_VERSION=v2.0
-
-          # Setting the Uvicorn command
+            # ✅ Add the API key secret that your router verifies
+            FIN_TRAQ_API_KEY=${{ secrets.FIN_TRAQ_API_KEY }} 
+            
+          # Setting the Uvicorn command - RETAINED
           entrypoint: uvicorn
           args: |
             ["app:app", "--host", "0.0.0.0", "--port", "$PORT", "--log-level", "info"]
             
-          # Removed: secrets: ... (No longer needed, Firestore uses ADC)
-            
-          # Use the 'flags' input for custom gcloud run flags
+          # Use the 'flags' input for custom gcloud run flags - RETAINED
           flags: --no-allow-unauthenticated
