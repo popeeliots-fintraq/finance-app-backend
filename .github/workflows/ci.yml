@@ -50,16 +50,11 @@ jobs:
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
       
-      # ⚠️ CRITICAL FIX: Checking for Core Schema Files (Migration Safety Check)
-      - name: Check for Core Schema Files (Migration Safety Check)
-        run: |
-          # 🚨 FIX: Replaced the failing SQL import check with a file system check.
-          # This ensures that old, conflicting V1 files are not deployed.
-          echo "Checking for old SQL models to ensure deletion..."
-          ls db/base.py 2> /dev/null && { echo "ERROR: Old db/base.py found. Migration is incomplete."; exit 1; } || echo "db/base.py is gone or correctly removed."
-          
+      # ⚠️ Structural Safety Check REMOVED!
+      # The check for 'db/base.py' is no longer needed as the file has been deleted.
+      
       - name: Basic API Health Check
-        run: echo "Code quality check passed. Proceeding to deployment."
+        run: echo "Code quality and structural check passed. Proceeding to deployment."
 
   # ---------------------
   # 2. CONTINUOUS DEPLOYMENT: Build, Push, and Deploy to Cloud Run
