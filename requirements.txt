@@ -7,16 +7,22 @@ gunicorn==21.2.0
 
 # Database ORM (Asynchronous)
 sqlalchemy==2.0.27
-# 🌟 CRITICAL: Replace psycopg2-binary with asyncpg for async PostgreSQL
-asyncpg==0.29.0 
+asyncpg==0.29.0
+# CRITICAL ADDITION 1: For SQLAlchemy to handle JSON type mapping correctly in PostgreSQL
+# This is required for the 'leakage_buckets' column in salary_profile.py
+psycopg2-binary==2.9.9 
 
 # Data Handling & ML
 pydantic==2.6.4
 python-dotenv==1.0.1
-# 🌟 RECOMMENDED: Add 'python-multipart' for potential file uploads (like receipts)
 python-multipart==0.0.9
-# 🌟 RECOMMENDED: Add 'alembic' for production-ready database migrations
-alembic==1.13.1 
+
+# CRITICAL ADDITION 2: For handling complex data structures (Dict/List) in FastAPI/Pydantic
+# This helps with serialization/deserialization, especially for JSON fields
+typing-extensions==4.9.0 
+
+# Database Management
+alembic==1.13.1
 
 # Development/Linting (Optional, but good practice)
 flake8==7.0.0
