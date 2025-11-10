@@ -8,6 +8,9 @@ from decimal import Decimal
 
 from ..db.base import Base
 
+# CRITICAL FIX: Import the related User model
+from .user_profile import User 
+
 class SalaryAllocationProfile(Base):
     __tablename__ = "salary_allocation_profiles"
     
