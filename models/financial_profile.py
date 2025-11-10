@@ -1,4 +1,4 @@
-# models/financial_profile.py
+# models/financial_profile.py (FINAL, FIXED)
 
 from typing import Optional
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,6 +7,9 @@ from datetime import datetime
 from decimal import Decimal
 
 from ..db.base import Base
+
+# CRITICAL FIX: Import related model for relationship type hinting
+from .user_profile import User # <--- FIX
 
 class FinancialProfile(Base):
     __tablename__ = "financial_profiles"
