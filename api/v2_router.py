@@ -1,30 +1,40 @@
-# v2_router.py (in the 'api' folder)
+# api/v2_router.py
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import date
 from typing import List, Dict, Any
 
-# 🌟 CRITICAL FIX: Replace Firestore import with AsyncSession for PostgreSQL
+# 🌟 CRITICAL: Use AsyncSession for SQLAlchemy
 from sqlalchemy.ext.asyncio import AsyncSession 
 
-# NOTE: Removed 'from google.cloud.firestore import Client as FirestoreClient'
-
 # Assuming standard FastAPI dependencies and utility functions
-# Paths are correct because 'api' is a sibling to 'services', etc.
 from ..dependencies import get_db, get_current_user_id 
 
 # Import the core services
 from ..services.orchestration_service import OrchestrationService
 
 # --- V2 ADDITION: Import the Leakage Router ---
-# Assuming 'leakage.py' is in 'api/v2/leakage.py'
+# Assuming 'leakage.py' is in 'api/v2/leakage.py' (This path should be confirmed, but structure is fine)
 from .v2.leakage import router as leakage_router 
 
-# Import the Pydantic schemas you provided
+# 🌟 FIX: Import the CORRECTED Pydantic schemas
 from ..schemas.orchestration_data import (
-    ConsentPlanOut, ConsentMoveIn, ConsentMoveOut, 
-    RecalculationResponse, SuggestedAllocation
+    # ConsentPlanOut -> SuggestionPlanResponse (Finalized name)
+    SuggestionPlanResponse, 
+    # ConsentMoveOut -> ExecutionResponse (Finalized name)
+    ExecutionResponse,
+    # RecalculationResponse is correct
+    RecalculationResponse,
+    # We need the Input model for the POST /consent endpoint
+    TransferSuggestion
 )
+
+# 🌟 FIX: Define the required Pydantic Input model for the /consent body
+class ConsentMoveIn(BaseModel):
+    # This structure is needed because ConsentMoveIn was not defined in the provided schemas
+    reporting_period: str = Field(..., description="The reporting period for the consent (YYYY-MM-DD).")
+    transfer_plan: List[TransferSuggestion] = Field(..., description="The list of transfers to be executed (user's consented plan).")
+
 
 router = APIRouter(
     prefix="/v2",
@@ -45,14 +55,12 @@ router.include_router(leakage_router)
 
 @router.post(
     "/autopilot/transaction-hook", 
-    response_model=RecalculationResponse,
+    response_model=RecalculationResponse, # Correct: Matches the output of recalculate_current_period_leakage
     status_code=status.HTTP_200_OK,
     summary="Simulate new categorized transaction; triggers Orchestration and Proactive Insights."
 )
-async def transaction_hook_trigger_orchestration( # Must be ASYNC
-    # In a real system, the body would contain the new Transaction ID and its date
+async def transaction_hook_trigger_orchestration(
     reporting_period_str: str,
-    # 🌟 FIX: Use AsyncSession type hint
     db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id) 
 ):
@@ -68,11 +76,9 @@ async def transaction_hook_trigger_orchestration( # Must be ASYNC
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    # 🌟 FIX: Pass the SQL session
     orch_service = OrchestrationService(db_session, user_id) 
     
-    # This call executes the 'recalculate_current_period_leakage' method
-    # 🌟 FIX: MUST AWAIT the asynchronous database operation
+    # This executes the 'recalculate_current_period_leakage' method
     result = await orch_service.recalculate_current_period_leakage(reporting_period)
 
     return result
@@ -84,12 +90,11 @@ async def transaction_hook_trigger_orchestration( # Must be ASYNC
 
 @router.get(
     "/autopilot/suggestion-plan", 
-    response_model=ConsentPlanOut,
+    response_model=SuggestionPlanResponse, # 🌟 FIXED: Use the correct schema name
     summary="Generates the tax-optimized allocation plan from the recovered salary pool."
 )
-async def get_suggestion_plan( # Must be ASYNC
+async def get_suggestion_plan(
     reporting_period_str: str,
-    # 🌟 FIX: Use AsyncSession type hint
     db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
@@ -105,9 +110,7 @@ async def get_suggestion_plan( # Must be ASYNC
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    # 🌟 FIX: Pass the SQL session
     orch_service = OrchestrationService(db_session, user_id) 
-    # 🌟 FIX: The service call likely involves database access and must be AWAITED
     plan_data = await orch_service.generate_consent_suggestion_plan(reporting_period)
 
     return plan_data
@@ -119,12 +122,11 @@ async def get_suggestion_plan( # Must be ASYNC
 
 @router.post(
     "/autopilot/consent", 
-    response_model=ConsentMoveOut,
+    response_model=ExecutionResponse, # 🌟 FIXED: Use the correct schema name
     summary="Executes the user-consented Autopilot transfers and logs the audit trail."
 )
-async def execute_autopilot_consent( # Must be ASYNC
+async def execute_autopilot_consent(
     consent_data: ConsentMoveIn,
-    # 🌟 FIX: Use AsyncSession type hint
     db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
@@ -141,14 +143,11 @@ async def execute_autopilot_consent( # Must be ASYNC
             detail="Invalid date format for reporting_period. Must be YYYY-MM-DD."
         )
 
-    # 🌟 FIX: Pass the SQL session
     orch_service = OrchestrationService(db_session, user_id) 
     
-    # Convert ConsentTransferItem list to a list of dictionaries 
-    # expected by the service method's 'transfer_plan' argument
+    # Convert TransferSuggestion list to a list of dictionaries 
     transfer_plan_dicts = [item.model_dump() for item in consent_data.transfer_plan]
 
-    # 🌟 FIX: The service call likely involves database access and must be AWAITED
     result = await orch_service.record_consent_and_update_balance(
         transfer_plan=transfer_plan_dicts, 
         reporting_period=reporting_period
