@@ -3,43 +3,41 @@
 import os
 import secrets
 from functools import lru_cache
+from typing import AsyncGenerator
 from fastapi import Header, HTTPException, status
-# NEW IMPORT: Need the Firestore Client library
-from google.cloud import firestore
-from google.cloud.firestore import Client as FirestoreClient
-from starlette.requests import Request
 
-# --- GLOBAL FIREBASE/FIRESTORE CLIENT INITIALIZATION ---
-# Use a global variable to hold the client instance
-# This adheres to the singleton pattern for efficiency in Cloud Run/FastAPI
-firestore_client: FirestoreClient = None
+# 🌟 NEW IMPORTS FOR POSTGRESQL/SQLAlchemy ASYNC CONNECTION
+from sqlalchemy.ext.asyncio import AsyncSession
+# Import the session factory from the file we will create next to hold the engine setup
+# Assuming the connection setup is in a new file named database_setup.py in the same directory (api/)
+from .database_setup import AsyncSessionLocal 
+# -------------------------------------------------------------------------------------
 
-def get_firestore_client() -> FirestoreClient:
-    """Initializes the global Firestore client instance if it doesn't exist."""
-    global firestore_client
-    if firestore_client is None:
-        # Client initialization is done only once. 
-        # It automatically handles authentication (ADC) from the Cloud Run environment.
-        firestore_client = firestore.Client()
-    return firestore_client
+# --- DATABASE DEPENDENCY (UPDATED FOR ASYNC POSTGRESQL) ---
 
-def get_db() -> FirestoreClient:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
-    FastAPI Dependency that provides the Cloud Firestore Client object.
-    
-    This replaces the old get_db function that provided an SQLAlchemy Session.
-    The 'yield' pattern is used, although for a simple client object (unlike a session), 
-    'return' is often sufficient, but 'yield' can be safer for future cleanup logic.
+    FastAPI Dependency that yields an asynchronous SQLAlchemy Session connected to Supabase PostgreSQL.
+    It handles automatic commit on success and rollback on exceptions (CRITICAL for financial integrity).
     """
-    try:
-        db_client = get_firestore_client()
-        yield db_client
-    except Exception as e:
-        # Raise an exception if the database client fails to initialize/connect
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database connection error: Could not initialize Firestore client. Detail: {e}"
-        )
+    # 1. Open a new asynchronous session from the factory
+    async with AsyncSessionLocal() as session:
+        try:
+            # 2. Yield the session to the FastAPI endpoint function
+            yield session
+            # 3. Commit the transaction after the endpoint finishes (if no exceptions)
+            await session.commit()
+        except Exception:
+            # 4. Rollback on any error
+            await session.rollback()
+            raise
+
+# --- MOCK USER ID (RETAINED/SIMPLIFIED) ---
+async def get_current_user_id() -> int:
+    """Mocking a user ID for service calls, to be replaced by actual auth logic later."""
+    # NOTE: In a real system, this would extract the user ID from the authentication token.
+    return 1  
+
 
 # --------------------------------------------------------------------------
 # EXISTING API KEY VALIDATION CODE (NO CHANGES NEEDED)
