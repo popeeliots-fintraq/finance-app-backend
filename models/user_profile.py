@@ -1,4 +1,5 @@
-# models/user_profile.py
+# models/user_profile.py (FINAL, FIXED)
+
 from typing import List
 from decimal import Decimal
 from typing import Optional
@@ -6,9 +7,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Integer, String, DECIMAL, ForeignKey
 from datetime import datetime
 
-
 from ..db.base import Base
 from ..db.enums import CityTier, EnumString # Import the Enum helper
+
+# CRITICAL FIX: Import related models for relationship type hinting
+from .financial_profile import FinancialProfile # <--- FIX
+from .salary_profile import SalaryAllocationProfile # <--- FIX (Assuming a salary_profile.py exists)
 
 class User(Base):
     __tablename__ = "users"
@@ -29,5 +33,7 @@ class User(Base):
     city_tier: Mapped[CityTier] = mapped_column(EnumString(CityTier), default=CityTier.TIER_2)
     
     # Relationships
+    # Note: We still use string literals in Mapped[] type hints, but the actual class
+    # must be imported above for the relationship() call to work correctly.
     financial_profile: Mapped["FinancialProfile"] = relationship(back_populates="user", uselist=False)
     salary_profiles: Mapped[List["SalaryAllocationProfile"]] = relationship(back_populates="user")
