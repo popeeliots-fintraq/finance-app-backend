@@ -1,9 +1,11 @@
 # models/user_profile.py
-
+from typing import List
+from decimal import Decimal
 from typing import Optional
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Integer, String, DECIMAL, ForeignKey
 from datetime import datetime
+
 
 from ..db.base import Base
 from ..db.enums import CityTier, EnumString # Import the Enum helper
