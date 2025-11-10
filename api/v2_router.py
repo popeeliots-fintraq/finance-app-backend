@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import date
 from typing import List, Dict, Any
+from pydantic import BaseModel, Field
 
 # 🌟 CRITICAL: Use AsyncSession for SQLAlchemy
 from sqlalchemy.ext.asyncio import AsyncSession 
