@@ -3,21 +3,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import date
 from typing import List, Dict, Any
-# NOTE: Removed 'from sqlalchemy.orm import Session'
 
-# Import the Firestore Client type for correct type hinting
-from google.cloud.firestore import Client as FirestoreClient # New Import
+# 🌟 CRITICAL FIX: Replace Firestore import with AsyncSession for PostgreSQL
+from sqlalchemy.ext.asyncio import AsyncSession 
+
+# NOTE: Removed 'from google.cloud.firestore import Client as FirestoreClient'
 
 # Assuming standard FastAPI dependencies and utility functions
-# Paths are correct because 'api' is a sibling to 'db', 'services', etc.
-# NOTE: get_db must now yield the FirestoreClient object.
+# Paths are correct because 'api' is a sibling to 'services', etc.
 from ..dependencies import get_db, get_current_user_id 
 
 # Import the core services
 from ..services.orchestration_service import OrchestrationService
 
 # --- V2 ADDITION: Import the Leakage Router ---
-# CRITICAL FIX: The path must be relative to this file's location ('api/').
 # Assuming 'leakage.py' is in 'api/v2/leakage.py'
 from .v2.leakage import router as leakage_router 
 
@@ -37,7 +36,6 @@ router = APIRouter(
 # ======================================================================
 
 # Include the new Leakage Router. 
-# Endpoints available: /v2/leakage/calculate and /v2/leakage/insights
 router.include_router(leakage_router)
 
 
@@ -51,11 +49,11 @@ router.include_router(leakage_router)
     status_code=status.HTTP_200_OK,
     summary="Simulate new categorized transaction; triggers Orchestration and Proactive Insights."
 )
-def transaction_hook_trigger_orchestration(
+async def transaction_hook_trigger_orchestration( # Must be ASYNC
     # In a real system, the body would contain the new Transaction ID and its date
     reporting_period_str: str,
-    # FIX: Replaced Session with FirestoreClient
-    db_client: FirestoreClient = Depends(get_db), 
+    # 🌟 FIX: Use AsyncSession type hint
+    db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id) 
 ):
     """
@@ -70,11 +68,12 @@ def transaction_hook_trigger_orchestration(
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    # FIX: Pass the Firestore client instead of a SQL session
-    orch_service = OrchestrationService(db_client, user_id) 
+    # 🌟 FIX: Pass the SQL session
+    orch_service = OrchestrationService(db_session, user_id) 
     
     # This call executes the 'recalculate_current_period_leakage' method
-    result = orch_service.recalculate_current_period_leakage(reporting_period)
+    # 🌟 FIX: MUST AWAIT the asynchronous database operation
+    result = await orch_service.recalculate_current_period_leakage(reporting_period)
 
     return result
 
@@ -88,10 +87,10 @@ def transaction_hook_trigger_orchestration(
     response_model=ConsentPlanOut,
     summary="Generates the tax-optimized allocation plan from the recovered salary pool."
 )
-def get_suggestion_plan(
+async def get_suggestion_plan( # Must be ASYNC
     reporting_period_str: str,
-    # FIX: Replaced Session with FirestoreClient
-    db_client: FirestoreClient = Depends(get_db), 
+    # 🌟 FIX: Use AsyncSession type hint
+    db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
     """
@@ -106,9 +105,10 @@ def get_suggestion_plan(
             detail="Invalid date format. Must be YYYY-MM-DD."
         )
 
-    # FIX: Pass the Firestore client instead of a SQL session
-    orch_service = OrchestrationService(db_client, user_id) 
-    plan_data = orch_service.generate_consent_suggestion_plan(reporting_period)
+    # 🌟 FIX: Pass the SQL session
+    orch_service = OrchestrationService(db_session, user_id) 
+    # 🌟 FIX: The service call likely involves database access and must be AWAITED
+    plan_data = await orch_service.generate_consent_suggestion_plan(reporting_period)
 
     return plan_data
 
@@ -122,10 +122,10 @@ def get_suggestion_plan(
     response_model=ConsentMoveOut,
     summary="Executes the user-consented Autopilot transfers and logs the audit trail."
 )
-def execute_autopilot_consent(
+async def execute_autopilot_consent( # Must be ASYNC
     consent_data: ConsentMoveIn,
-    # FIX: Replaced Session with FirestoreClient
-    db_client: FirestoreClient = Depends(get_db), 
+    # 🌟 FIX: Use AsyncSession type hint
+    db_session: AsyncSession = Depends(get_db), 
     user_id: int = Depends(get_current_user_id)
 ):
     """
@@ -141,14 +141,15 @@ def execute_autopilot_consent(
             detail="Invalid date format for reporting_period. Must be YYYY-MM-DD."
         )
 
-    # FIX: Pass the Firestore client instead of a SQL session
-    orch_service = OrchestrationService(db_client, user_id) 
+    # 🌟 FIX: Pass the SQL session
+    orch_service = OrchestrationService(db_session, user_id) 
     
     # Convert ConsentTransferItem list to a list of dictionaries 
     # expected by the service method's 'transfer_plan' argument
     transfer_plan_dicts = [item.model_dump() for item in consent_data.transfer_plan]
 
-    result = orch_service.record_consent_and_update_balance(
+    # 🌟 FIX: The service call likely involves database access and must be AWAITED
+    result = await orch_service.record_consent_and_update_balance(
         transfer_plan=transfer_plan_dicts, 
         reporting_period=reporting_period
     )
