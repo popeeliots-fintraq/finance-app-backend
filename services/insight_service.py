@@ -1,13 +1,15 @@
-# services/insight_service.py (FINAL INTEGRATED VERSION)
+# services/insight_service.py (ASYNC INTEGRATED VERSION)
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List
 from datetime import date, datetime
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+
+# 🌟 FIX: Import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession 
 
 # Assuming you have a User model, though primary data is passed via arguments
-from ..db.base import User 
+# NOTE: The User model import path is speculative, replace with your actual path if different
+# from ..db.base import User # Removed, as it's not strictly needed here
 
 class InsightService:
     """
@@ -15,11 +17,11 @@ class InsightService:
     (Leak Cards) based on real-time leakage calculation data.
     """
 
-    def __init__(self, db: Session, user_id: int):
+    # 🌟 FIX: Change DB type hint to AsyncSession
+    def __init__(self, db: AsyncSession, user_id: int):
         self.db = db
         self.user_id = user_id
         # Define categories that trigger high-priority behavioral nudges
-        # These are usually the Pure Discretionary (lowest SDS weight) categories
         self.HIGH_PRIORITY_CATEGORIES = ["Pure_Discretionary_DiningOut", "Pure_Discretionary_Subscription"] 
         self.DMB_BREACH_THRESHOLD = Decimal("0.30") # 30% above DMB triggers a strong warning
 
@@ -34,21 +36,14 @@ class InsightService:
             "generated_at": datetime.utcnow().isoformat()
         }
 
-    def generate_proactive_leak_insights(self, reporting_period: date, category_leaks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # 🌟 FIX: Make the function async for consistency, though it has no await calls
+    async def generate_proactive_leak_insights(self, reporting_period: date, category_leaks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Analyzes the detailed leakage buckets and generates specific, actionable insight cards.
-
-        Args:
-            reporting_period: The current month being analyzed.
-            category_leaks: The 'leakage_buckets' list (Leakage Bucket View) from the LeakageService.
-            
-        Returns:
-            A list of generated insight cards (dictionaries), sorted by priority.
         """
         insights = []
         
         # 1. Calculate the overall projected reclaimable salary
-        # This includes the annual tax headroom leak if available
         reclaimable_salary = Decimal("0.00")
         for bucket in category_leaks:
              reclaimable_salary += bucket.get('leak_amount', Decimal("0.00"))
@@ -57,10 +52,11 @@ class InsightService:
         # 2. Iterate through each leakage bucket to generate category-specific insights
         for bucket in category_leaks:
             category = bucket.get('category')
-            leak_amount = bucket.get('leak_amount', Decimal("0.00")).quantize(Decimal("0.01"))
-            baseline = bucket.get('baseline_threshold', Decimal("0.00"))
+            # Ensure Decimal conversion from possible string/float input from the caller
+            leak_amount = Decimal(str(bucket.get('leak_amount', "0.00"))).quantize(Decimal("0.01"))
+            baseline = Decimal(str(bucket.get('baseline_threshold', "0.00")))
             sds_class = bucket.get('sds_weight_class')
-            spend = bucket.get('spend', Decimal("0.00"))
+            spend = Decimal(str(bucket.get('spend', "0.00")))
 
             if leak_amount <= Decimal("100.00"): # Ignore trivial leaks
                 continue
@@ -77,7 +73,7 @@ class InsightService:
 
             # --- INSIGHT TYPE B: VARIABLE ESSENTIAL (VE) DMB BREACH WARNING ---
             elif sds_class in ["Variable_Essential"] and baseline > Decimal("0.00"):
-                percentage_over_baseline = leak_amount / baseline 
+                percentage_over_baseline = leak_amount / baseline  
                 
                 if percentage_over_baseline >= self.DMB_BREACH_THRESHOLD:
                     insights.append(self.create_insight_card(
@@ -103,7 +99,7 @@ class InsightService:
              insights.append(self.create_insight_card(
                 priority="TOP_ACTION", # Custom high priority to ensure it's first
                 title="✨ **Salary Autopilot Fund Ready**",
-                body=f"Your total projected reclaimable salary this month is **₹{reclaimable_salary}**. Tap to execute the tax-optimized goal transfer plan.",
+                body=f"Your total projected reclaimable salary this month is **₹{reclaimable_salary.quantize(Decimal('0.01'))}**. Tap to execute the tax-optimized goal transfer plan.",
                 call_to_action="EXECUTE AUTOPILOT PLAN",
                 context_data={"total_reclaimable": reclaimable_salary}
             ))
