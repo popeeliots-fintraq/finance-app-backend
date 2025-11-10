@@ -1,12 +1,23 @@
+# requirements.txt (Asynchronous PostgreSQL / FastAPI / Fin-Traq V2)
+
 # Web Server / API Framework
 fastapi==0.110.0
 uvicorn==0.29.0
 gunicorn==21.2.0
 
-# Database ORM
-sqlalchemy==2.0.27   # <-- ADD THIS
-psycopg2-binary==2.9.9 # <-- ADD THIS (For PostgreSQL)
+# Database ORM (Asynchronous)
+sqlalchemy==2.0.27
+# 🌟 CRITICAL: Replace psycopg2-binary with asyncpg for async PostgreSQL
+asyncpg==0.29.0 
 
-# Data Validation / Configuration
-pydantic==2.6.4     # <-- ADD THIS (Used heavily by FastAPI and your schemas)
+# Data Handling & ML
+pydantic==2.6.4
 python-dotenv==1.0.1
+# 🌟 RECOMMENDED: Add 'python-multipart' for potential file uploads (like receipts)
+python-multipart==0.0.9
+# 🌟 RECOMMENDED: Add 'alembic' for production-ready database migrations
+alembic==1.13.1 
+
+# Development/Linting (Optional, but good practice)
+flake8==7.0.0
+black==24.3.0
