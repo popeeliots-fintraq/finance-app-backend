@@ -1,7 +1,8 @@
 # models/smart_transfer.py
 
 from typing import Optional
-from sqlalchemy.orm import Mapped, mapped_column
+# CRITICAL FIX: Add 'relationship' to the import list
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Integer, DECIMAL, DateTime, ForeignKey, String
 from datetime import datetime
 from decimal import Decimal
@@ -49,5 +50,5 @@ class SmartTransferLog(Base):
     # Status of the actual UPI/Bank transfer
     execution_status: Mapped[str] = mapped_column(String(50)) 
     
-    # Relationships (Optional but helpful)
-    rule: Mapped["SmartTransferRule"] = relationship()
+    # Relationships 
+    rule: Mapped["SmartTransferRule"] = relationship(back_populates="logs") # <--- relationship is now imported
