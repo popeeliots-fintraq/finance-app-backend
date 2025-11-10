@@ -1,9 +1,9 @@
-# api/v2/leakage.py (FIXED)
+# api/v2/leakage.py (FINAL, FIXED)
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query # <-- ADDED HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status, Query # <-- Added HTTPException & Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any
-from datetime import date
+from datetime import date # <-- Added date import
 
 # Import dependencies
 from ...dependencies import get_db, get_current_user_id
@@ -18,4 +18,12 @@ from ...schemas.financial_profile import FinancialProfileResponse
 from ...schemas.leakage_data import LeakageOut
 
 router = APIRouter(
+    prefix="/leakage",
+    tags=["Leakage & ML (EFS/DMB)"],
+)
+
+# ----------------------------------------------------------------------
+# ENDPOINT 1: INITIALIZE / UPDATE EFS & DMB (The ML Engine Trigger)
+# ----------------------------------------------------------------------
+@router.post(
 # ... (rest of the file remains the same)
